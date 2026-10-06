@@ -13,10 +13,12 @@ A KiCad hardware design plus STM32 firmware for a hall-sensored e-bike or scoote
 
 ```
 hardware/
-  kicad/                 KiCad project (bldc48.kicad_pro): 4-sheet schematic + placed PCB
+  kicad/                 KiCad project (bldc48.kicad_pro): 4-sheet schematic + routed 4-layer PCB
+  renders/               3D renders, routing/layer images, bldc48.glb 3D model
   bldc48-schematic.pdf   schematic as PDF
   bom.csv                bill of materials
-  tools/                 circuit.py (the netlist source), generators, connectivity checker
+  tools/                 circuit.py (the netlist source), generators, autorouting, connectivity checker,
+                         render3d/ (VRML export + headless three.js renderer)
 firmware/
   src/                   STM32G431 firmware (register-level, no HAL)
   sim/                   closed-loop PC simulation of the firmware against a hub-motor model
@@ -24,10 +26,16 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The PCB has every footprint placed and every net assigned, **but no tracks are
-> routed yet**. A 35 A power stage needs careful hand routing; see [PCB layout rules](#pcb-layout-rules).
+> [Verification](#verification)). The 190 × 120 mm 4-layer PCB is **fully routed and passes KiCad DRC with 0
+> unconnected pads and 0 clearance errors**, but the routing was done by an autorouter (Freerouting) plus scripted
+> copper pours. Have it reviewed against the [PCB layout rules](#pcb-layout-rules) before ordering; in particular
+> the INA240 sense lines are not Kelvin-routed as a differential pair, and the router ran the MCU ↔ power-stage
+> signal bus partly on the inner layers, which slots the +48V plane below the FETs (the bus-cap → FET path is not
+> cut, but moving that bus to the outer layers would be better).
 > The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
 > first board up with the current-limited procedure in [First power-up](#first-power-up).
+
+![3D render of the routed board](hardware/renders/bldc48-iso.png)
 
 ---
 
@@ -174,8 +182,9 @@ also gives a 20 V UVLO.
 * `hardware/tools/check_netlist.py` exports KiCad's own netlist and checks that **every pin of all 172 parts** sits on
   the intended net, with no single-node nets. KiCad 7's CLI has no ERC, so this replaces it. A deliberately miswired
   pin is caught.
-* The PCB has no courtyard overlaps in KiCad DRC. The remaining DRC items are the unrouted connections and silkscreen
-  cosmetics.
+* KiCad DRC on the routed PCB: **0 unconnected pads, 0 clearance / hole-clearance errors, no shorts, no courtyard
+  overlaps**. The only remaining items are silkscreen cosmetics (a few overlapping reference designators) and a
+  library-table notice that only appears when DRC runs headless.
 * `cd firmware && make sim` runs the **real** `motor.c`/`hall.c`/`cli.c` in closed loop against a model with:
   dead-time, PWM delay, ADC noise and offsets, 120° halls at an arbitrary offset, a 100 kg rider and a battery with
   internal resistance. It does this for two different motors. Results for motor 1:
@@ -206,8 +215,35 @@ The schematic, PCB and BOM are generated from `hardware/tools/circuit.py`, using
 KiCad libraries. After you edit the circuit, run `hardware/tools/regen.sh`. It needs KiCad ≥ 7; KiCad 8 and 9 open the
 files directly.
 
-**Note:** regenerating the PCB overwrites placement and routing. Once you start routing, make further changes in KiCad
-(Tools → Update PCB from Schematic). The footprints are already linked to their schematic symbols for that.
+`regen.sh` only places the parts. The board was then routed with
+`hardware/tools/route_pcb.py --legacy --freerouting freerouting-1.9.0.jar`. This script:
+- routes every net on all four layers with Freerouting (headless, under `xvfb-run`)
+- imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself
+  and restores any layer-change vias the router left out)
+- adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads
+- fills the zones and writes a DRC report
+
+`hardware/tools/render3d/render.sh` exports the board to VRML with the KiCad 3D models and renders the PNGs in
+`hardware/renders/` with three.js in headless Chromium.
+
+**Note:** regenerating overwrites placement and routing. For changes after this point, edit the board in KiCad and use
+Tools → Update PCB from Schematic. The footprints are already linked to their schematic symbols for that.
+
+### Board
+
+| Overview | Power stage |
+|---|---|
+| ![overview](hardware/renders/bldc48-iso.png) | ![power stage](hardware/renders/bldc48-power.png) |
+| ![top](hardware/renders/bldc48-top.png) | ![controller](hardware/renders/bldc48-logic.png) |
+
+Routing (tracks only, pours hidden): ![routing](hardware/renders/bldc48-routing.png)
+
+Copper layers: [top](hardware/renders/bldc48-layer-top.png) · [inner 1, GND](hardware/renders/bldc48-layer-in1.png) ·
+[inner 2, +48V/+3V3](hardware/renders/bldc48-layer-in2.png) · [bottom](hardware/renders/bldc48-layer-bottom.png)
+
+Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
+In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. 355 vias in
+the FET, shunt, motor-pad and DC-link capacitor pads tie the outer pours and the planes together.
 
 ## PCB layout rules
 

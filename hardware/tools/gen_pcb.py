@@ -5,7 +5,8 @@ Create bldc48.kicad_pcb from circuit.py using KiCad's pcbnew Python API.
 Footprints are placed by function (power stage on the left two thirds, logic
 and connectors on the right), nets are assigned to every pad and each
 footprint is linked to its schematic symbol, so "Update PCB from Schematic"
-works afterwards without losing placement.  Tracks are NOT routed.
+works afterwards without losing placement.  Tracks are not routed here:
+route_pcb.py routes this placement and adds planes/pours.
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
@@ -20,7 +21,8 @@ from gen_schematic import Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 170.0, 100.0          # board size, mm
+W, H = 190.0, 120.0          # board size, mm
+GAP = 2.0                    # min spacing between courtyards (room for fan-out vias)
 
 
 def mm(x, y):
@@ -47,6 +49,9 @@ def size_of(fp):
             pcbnew.ToMM(c.x), pcbnew.ToMM(c.y))
 
 
+_ina_caps = []
+
+
 def group_of(c):
     """Assign each part to a placement region."""
     s, ref, v = c['sheet'], c['ref'], c['value']
@@ -56,7 +61,23 @@ def group_of(c):
     if s == 'bridge':
         for ph in 'ABC':
             if any(n.endswith('_' + ph) for n in pins):
-                return 'phase' + ph
+                if c['lib_id'].startswith('Transistor_FET'):
+                    return f'hifet{ph}' if '+48V' in pins else f'lofet{ph}'
+                if v == '0.5m':
+                    return f'shunt{ph}'
+                if ref.startswith('J'):
+                    return f'pad{ph}'
+                if 'INA240' in v or any(n.startswith(('ISO_', 'ISENSE_')) for n in pins):
+                    return f'sense{ph}'
+                return f'drv{ph}'
+        if v == '100n':                       # INA240 decouplers (only +3V3/GND pins)
+            return 'senseA' if not _ina_caps.append(1) and len(_ina_caps) == 1 else \
+                'senseB' if len(_ina_caps) == 2 else 'senseC'
+        if 'u/100V' in v and c['lib_id'] == 'Device:C_Polarized':
+            return 'bulk'
+        if v == '2.2u/100V':
+            return 'ceramic'
+        return 'sense' 
         if 'u/100V' in v and c['lib_id'] == 'Device:C_Polarized':
             return 'bulk'
         if v == '2.2u/100V':
@@ -86,30 +107,37 @@ def group_of(c):
 
 # Placement regions: (x0, y0, x1, y1) in mm
 REGIONS = {
-    'bulk':    (8, 3, 104, 17),
-    'battery': (3, 19, 22, 70),
-    'phaseA':  (24, 27, 50, 97),
-    'phaseB':  (51, 27, 77, 97),
-    'phaseC':  (78, 27, 104, 97),
-    'ceramic': (24, 19, 104, 26),
-    'sense':   (3, 72, 22, 92),
-    'buck12':  (107, 3, 140, 30),
-    'buck5':   (107, 31, 140, 58),
-    'ldo':     (141, 3, 160, 15),
-    'latch':   (141, 16, 166, 34),
-    'mcu':     (107, 60, 135, 97),
-    'io':      (136, 35, 166, 60),
-    'conn':    (136, 61, 166, 92),
+    'bulk':    (10, 2, 112, 18),
+    'ceramic': (26, 18, 112, 26),
+    'battery': (2, 20, 24, 76),
+    'sense':   (2, 78, 24, 110),
+    'buck12':  (120, 2, 160, 34),
+    'buck5':   (120, 36, 160, 68),
+    'ldo':     (162, 7, 184, 24),
+    'latch':   (162, 25, 188, 46),
+    'mcu':     (120, 70, 155, 117),
+    'io':      (157, 48, 188, 78),
+    'conn':    (157, 80, 183, 117),
     'holes':   None,
 }
+for _i, _ph in enumerate('ABC'):
+    _x = 26 + 29 * _i
+    REGIONS.update({
+        f'hifet{_ph}': (_x, 27, _x + 15, 45),
+        f'lofet{_ph}': (_x, 46, _x + 15, 64),
+        f'shunt{_ph}': (_x, 65, _x + 15, 74),
+        f'pad{_ph}':   (_x, 100, _x + 15, 117),
+        f'drv{_ph}':   (_x + 15, 27, _x + 28.5, 64),
+        f'sense{_ph}': (_x + 15, 66, _x + 28.5, 98),
+    })
 
 
 def pack(fps, region):
     x0, y0, x1, y1 = region
     x, y, row = x0, y0, 0.0
     for fp, (w, h, cx, cy) in fps:
-        w += 0.6
-        h += 0.6
+        w += GAP
+        h += GAP
         if x + w > x1 and x > x0:
             x, y, row = x0, y + row, 0.0
         if y + h > y1:
@@ -174,9 +202,8 @@ def main():
             for fp, pos in zip([f for f, _ in items], [(4, 4), (W - 4, 4), (4, H - 4), (W - 4, H - 4)]):
                 fp.SetPosition(mm(*pos))
             continue
-        if g.startswith('phase'):
-            # big parts first: FETs, shunt, phase pad, then small stuff
-            items.sort(key=lambda it: -(it[1][0] * it[1][1]))
+        if g.startswith(('drv', 'sense')):
+            items.sort(key=lambda it: -(it[1][0] * it[1][1]))     # IC first
         pack(items, REGIONS[g])
 
     # move mounting-hole-clashing bulk region a little: holes sit in corners
@@ -190,7 +217,7 @@ def main():
     board.Add(rect)
 
     # silkscreen notes
-    for txt, x, y in [('48V 35A BLDC  rev A', 125, 93), ('BAT+ / BAT-', 13, 72)]:
+    for txt, x, y in [('48V 35A BLDC  rev A', 140, 116), ('BAT+ / BAT-', 12, 77)]:
         t = pcbnew.PCB_TEXT(board)
         t.SetText(txt)
         t.SetPosition(mm(x, y))

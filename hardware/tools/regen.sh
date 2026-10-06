@@ -8,4 +8,4 @@ python3 check_netlist.py ../kicad/bldc48.kicad_sch
 python3 gen_pcb.py
 python3 gen_bom.py
 kicad-cli sch export pdf -o ../bldc48-schematic.pdf ../kicad/bldc48.kicad_sch >/dev/null
-echo "done"
+echo "done (placement only; run route_pcb.py to route, render3d/render.sh for renders)"

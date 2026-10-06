@@ -1,0 +1,10 @@
+{
+  "name": "bldc48-render3d",
+  "private": true,
+  "type": "module",
+  "description": "Headless three.js renders of the KiCad VRML export",
+  "dependencies": {
+    "playwright-core": "1.56.0",
+    "three": "0.169.0"
+  }
+}

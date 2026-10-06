@@ -5,3 +5,5 @@ hardware/kicad/fp-info-cache
 hardware/kicad/*.lck
 __pycache__/
 *.pyc
+hardware/tools/render3d/node_modules
+hardware/tools/render3d/board.wrl
