@@ -1,0 +1,7 @@
+firmware/build/
+hardware/kicad/*.kicad_prl
+hardware/kicad/*-backups/
+hardware/kicad/fp-info-cache
+hardware/kicad/*.lck
+__pycache__/
+*.pyc

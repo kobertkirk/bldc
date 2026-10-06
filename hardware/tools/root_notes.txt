@@ -1,0 +1,12 @@
+DESIGN SUMMARY
+- Battery: 48 V nominal (13S Li-ion, 54.6 V full). Abs. max 60 V (TVS SMCJ60CA, 100 V FETs/drivers/bucks).
+- Battery current limit 35 A (firmware, from FOC power estimate). Phase current limit 60 A (firmware), hard trip 80 A.
+- Power stage: 6 x IPT015N10N5 (100 V, 1.5 mOhm, TOLL) driven by 3 x LM5109B half-bridge drivers @ 20 kHz.
+- Current sensing: in-line 0.5 mOhm phase shunts + INA240A2 (G=50, mid-rail ref) -> +/-64 A full scale.
+- Control: STM32G431CB @170 MHz, hall-sensor FOC with angle interpolation; hall/R/L auto-detect over UART.
+- Supplies: LM5164 48->12 V (gate drive), LM5164 48->5 V (halls/throttle), AP2112 5->3.3 V (logic).
+- Soft power: momentary button to GND wakes the bucks via Q1, MCU latches with PWR_HOLD; long press = off.
+- I/O: hall + motor NTC (JST-PH6), throttle (PH3), FWD/REV switch (PH2), brake (PH2), power button (PH2),
+  UART 115200 8N1 3.3 V (PH4: 3V3, TX, RX, GND), SWD (1x5 header).
+LAYOUT RULES: 2 oz copper min (4 layer preferred), bus/phase pours >= 10 mm wide, FET tabs on thermal-via arrays
+to an aluminium heat spreader, Kelvin-route INA240 inputs from the shunt pads, DC-link ceramics at each half bridge.
