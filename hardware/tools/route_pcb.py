@@ -33,7 +33,7 @@ from sexp import find, find1, parse  # noqa: E402
 import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
+PCB = os.environ.get('BLDC_PCB') or os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
 from gen_pcb import (ARRAY_Y, CAP_X, CAP_YS, CH_W, COLW, H, POWER_X, TVS_POS, W, Y_HI, Y_LO,  # noqa: E402
                      col_x)  # board geometry
 
@@ -487,7 +487,7 @@ COSMETIC = ('unconnected_items', 'silk_overlap', 'silk_over_copper', 'silk_edge_
 _ITEM = re.compile(r'@\(([-0-9.]+) mm, ([-0-9.]+) mm\): (.*)')
 
 
-def drc(board, path='/tmp/bldc48-drc-probe.rpt'):
+def drc(board, path=f'/tmp/bldc48-drc-probe-{os.getpid()}.rpt'):
     """Run KiCad DRC; return (list of (type, [(x, y, desc), ...]), n_unconnected)."""
     pcbnew.WriteDRCReport(board, path, pcbnew.EDA_UNITS_MILLIMETRES, True)
     items, cur = [], None

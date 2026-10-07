@@ -36,8 +36,9 @@ import circuit  # noqa: E402
 from gen_schematic import KICAD_DIR, PROJECT_LIB, Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 90.0, 68.5            # board size, mm (9.6 sq in)
+OUT = os.environ.get('BLDC_PCB') or \
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
+W, H = 90.0, float(os.environ.get('BLDC_H', 68.5))   # board size, mm (9.6 sq in)
 GAP = 1.0                    # min spacing between packed courtyards
 
 # power-array geometry (shared with route_pcb.py)
