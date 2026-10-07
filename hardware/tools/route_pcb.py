@@ -581,17 +581,18 @@ def _add_items(board, net, items):
             board.Add(t)
 
 
-def grid_finish(board):
+def grid_finish(board, first=()):
     """Route what is still open with the 4-layer grid router (astar_route.py):
     first kept off the power array's outer layers, then without that fence for
     nets that live inside it (gate drive, sense).  Deterministic, so a rebuild
     from the same SES gives the same board."""
     import astar_route
     items, _ = drc(board)
-    done = 0
-    for t, locs in [it for it in items if it[0] == 'unconnected_items']:
-        if len(locs) < 2:
-            continue
+    done, fails = 0, []
+    todo = [it for it in items if it[0] == 'unconnected_items' and len(it[1]) >= 2]
+    netof = lambda it: re.search(r'\[(.*?)\]', it[1][0][2]).group(1)   # noqa: E731
+    todo.sort(key=lambda it: netof(it) not in first)          # previously stuck ones first
+    for t, locs in todo:
         net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
         if _pour_joined(net, locs):
             continue
@@ -606,7 +607,8 @@ def grid_finish(board):
             break
         else:
             print(f'  grid router found no path for {net}')
-    return done
+            fails.append((net, a, b))
+    return done, fails
 
 
 def auto_repair(board, max_tries=400):
@@ -691,9 +693,9 @@ def auto_repair(board, max_tries=400):
     return fixed
 
 
-def import_ses(board, ses_path):
+def import_ses(board, ses_path, extra_rip=()):
     import hashlib
-    rip = RIP_UP.get(hashlib.sha1(open(ses_path, 'rb').read()).hexdigest(), set())
+    rip = set(RIP_UP.get(hashlib.sha1(open(ses_path, 'rb').read()).hexdigest(), set())) | set(extra_rip)
     root = parse(open(ses_path).read())
     routes = find1(root, 'routes')
     res = find1(routes, 'resolution')
@@ -779,6 +781,8 @@ def main():
     ap.add_argument('--no-short-repair', action='store_true',
                     help='skip the DRC-checked short repairs (slow on a dense board) and go '
                          'straight to the grid router')
+    ap.add_argument('--ripup', type=int, default=0,
+                    help='rounds of rip-up-and-reroute for connections the grid router cannot finish')
     ap.add_argument('--no-optimize', action='store_true',
                     help='skip Freerouting route optimisation (1.9 can hang in it)')
     args = ap.parse_args()
@@ -818,14 +822,48 @@ def main():
     if not os.path.exists(ses):
         raise SystemExit('freerouting produced no SES')
 
-    nt, nv = import_ses(board, ses)
-    print(f'imported {nt} track segments, {nv} vias')
-    print(f'added {hand_routes(board, ses)} hand route(s)')
-    print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
-    if not args.no_short_repair:
-        print(f'auto-repaired {auto_repair(board)} open connection(s)')
-    plane_keepout(board, solid_in1=True)
-    print(f'grid-routed {grid_finish(board)} more')
+    import hashlib
+    rip = set(RIP_UP.get(hashlib.sha1(open(ses, 'rb').read()).hexdigest(), set()))
+    first = []
+    for rnd in range(args.ripup + 1):
+        if rnd:                              # fresh placement, then the SES minus the ripped nets
+            gen_pcb.main()
+            board = pcbnew.LoadBoard(PCB)
+            ds = board.GetDesignSettings()
+            ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
+            ds.SetCustomViaSize(True)
+            plane_keepout(board)
+            phase_keepout(board)
+            edge_keepout(board)
+            fanout(board)
+        nt, nv = import_ses(board, ses, extra_rip=rip)
+        print(f'imported {nt} track segments, {nv} vias')
+        print(f'added {hand_routes(board, ses)} hand route(s)')
+        print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
+        if not args.no_short_repair:
+            print(f'auto-repaired {auto_repair(board)} open connection(s)')
+        plane_keepout(board, solid_in1=True)
+        done, fails = grid_finish(board, first=first)
+        print(f'grid-routed {done} more, {len(fails)} still open')
+        if not fails or rnd == args.ripup:
+            break
+        # rip up whatever blocks the stuck connections and route them first next time
+        import astar_route
+        new = set()
+        for net, a, b in fails:
+            try:
+                _, _, crossed = astar_route.route(board, net, a, b, fence=False, soft=True)
+                new |= crossed
+            except SystemExit:
+                pass
+        new -= rip
+        if not new:
+            break
+        rip |= new
+        first = [f[0] for f in fails]
+        print(f'round {rnd + 1}: ripping up {sorted(new)}')
+    if rip:
+        print(f'RIP_UP for this SES: {sorted(rip)}')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
     outer_pours(board)

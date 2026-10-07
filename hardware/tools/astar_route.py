@@ -37,6 +37,9 @@ def to_mm(v):
     return pcbnew.ToMM(v)
 
 
+HARD_NETS = ('GND', '+48V', '+3V3', '+5V', 'SW_', 'LS_')   # never ripped up
+
+
 class Grid:
     def __init__(self):
         self.nx = int(W / G) + 1
@@ -44,12 +47,39 @@ class Grid:
         n = self.nx * self.ny
         self.track = [bytearray(n) for _ in LAYERS]     # 1 = a track centre here clashes
         self.via = bytearray(n)                         # 1 = a via centre here clashes
+        self.soft = None                                # cell -> nets that could be ripped up
 
     def xy(self, i, j):
         return i * G, OY + j * G
 
     def ij(self, x, y):
         return round(x / G), round((y - OY) / G)
+
+    def cells_disc(self, x, y, r):
+        out = []
+        i0, j0 = self.ij(x - r, y - r)
+        i1, j1 = self.ij(x + r, y + r)
+        for j in range(max(j0, 0), min(j1 + 1, self.ny)):
+            for i in range(max(i0, 0), min(i1 + 1, self.nx)):
+                cx, cy = self.xy(i, j)
+                if (cx - x) ** 2 + (cy - y) ** 2 <= r * r:
+                    out.append(j * self.nx + i)
+        return out
+
+    def cells_segment(self, ax, ay, bx, by, r):
+        out = []
+        i0, j0 = self.ij(min(ax, bx) - r, min(ay, by) - r)
+        i1, j1 = self.ij(max(ax, bx) + r, max(ay, by) + r)
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy or 1e-12
+        for j in range(max(j0, 0), min(j1 + 1, self.ny)):
+            for i in range(max(i0, 0), min(i1 + 1, self.nx)):
+                cx, cy = self.xy(i, j)
+                t = max(0.0, min(1.0, ((cx - ax) * dx + (cy - ay) * dy) / L2))
+                px, py = ax + t * dx - cx, ay + t * dy - cy
+                if px * px + py * py <= r * r:
+                    out.append(j * self.nx + i)
+        return out
 
     def mark_disc(self, grid, x, y, r):
         i0, j0 = self.ij(x - r, y - r)
@@ -92,11 +122,30 @@ class Grid:
                     grid[j * self.nx + i] = 1
 
 
-def build(board, net, fence=True):
+def build(board, net, fence=True, soft=False):
     g = Grid()
     code = board.FindNet(net).GetNetCode()
     rt, rv = TRACK_W / 2 + CLEAR, VIA_D / 2 + CLEAR
+    if soft:
+        g.soft = {}
     for t in board.GetTracks():
+        if soft and t.GetNetCode() != code and not t.GetNetname().startswith(HARD_NETS):
+            # rippable: remember the owner instead of blocking the cells
+            owner = t.GetNetname()
+            if t.GetClass() == 'PCB_VIA':
+                x, y = to_mm(t.GetPosition().x), to_mm(t.GetPosition().y)
+                idx = g.cells_disc(x, y, to_mm(t.GetWidth()) / 2 + rv)
+            else:
+                s_, e_ = t.GetStart(), t.GetEnd()
+                idx = g.cells_segment(to_mm(s_.x), to_mm(s_.y), to_mm(e_.x), to_mm(e_.y),
+                                      to_mm(t.GetWidth()) / 2 + rv)
+            ks = range(len(LAYERS)) if t.GetClass() == 'PCB_VIA' else \
+                ([LAYERS.index(t.GetLayer())] if t.GetLayer() in LAYERS else [])
+            n_ = g.nx * g.ny
+            for k in ks:
+                for i in idx:
+                    g.soft.setdefault(k * n_ + i, set()).add(owner)
+            continue
         if t.GetClass() == 'PCB_VIA':             # drill-to-drill spacing, any net
             x, y = to_mm(t.GetPosition().x), to_mm(t.GetPosition().y)
             g.mark_disc(g.via, x, y, VIA_D + 0.26)
@@ -167,8 +216,13 @@ def item_layers(board, net, x, y):
     raise SystemExit(f'no {net} item at ({x}, {y})')
 
 
-def route(board, net, a, b, to_plane=False, fence=True):
-    g = build(board, net, fence)
+SOFT_COST = 40.0
+
+
+def route(board, net, a, b, to_plane=False, fence=True, soft=False):
+    """A* path; with soft=True other signal nets may be crossed at a cost, and
+    the result also returns the set of nets that would have to be ripped up."""
+    g = build(board, net, fence, soft)
     sl = item_layers(board, net, *a)
     gl = [] if to_plane else item_layers(board, net, *b)
     si, sj = g.ij(*a)
@@ -219,6 +273,8 @@ def route(board, net, a, b, to_plane=False, fence=True):
                 if k2 != k and not g.track[k2][j * nx + i]:
                     steps.append((i, j, k2, VIA_COST))
         for a2, b2, k2, w in steps:
+            if g.soft is not None and (k2 * nx * g.ny + b2 * nx + a2) in g.soft:
+                w += SOFT_COST
             nc = c + w
             if nc < cost.get((a2, b2, k2), 1e18):
                 cost[(a2, b2, k2)] = nc
@@ -234,6 +290,11 @@ def route(board, net, a, b, to_plane=False, fence=True):
         path.append(n)
         n = came[n]
     path.reverse()
+    if soft:
+        crossed = set()
+        for i, j, k in path:
+            crossed |= g.soft.get(k * nx * g.ny + j * nx + i, set())
+        return g, path, crossed
     return g, path
 
 
