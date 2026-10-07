@@ -273,9 +273,13 @@ def unclash_refs(board):
     silk = [(f.GetReference(), g.GetBoundingBox()) for f in board.GetFootprints()
             for g in f.GraphicalItems() if g.GetLayer() == pcbnew.F_SilkS and g.GetClass() != 'PCB_TEXT']
 
+    pads = [p.GetBoundingBox() for f in board.GetFootprints() for p in f.Pads() if p.IsOnLayer(pcbnew.F_Cu)]
+    edge = pcbnew.BOX2I(mm(0.5, 0.5), mm(W - 1.0, H - 1.0))
+
     def clashes(fp):
         me, bb = fp.GetReference(), fp.Reference().GetBoundingBox()
-        return (any(r != me and bb.Intersects(b) for r, b in silk) or
+        return (not edge.Contains(bb) or any(bb.Intersects(b) for b in pads) or
+                any(bb.Intersects(b) for _, b in silk) or
                 any(f.GetReference() != me and f.Reference().IsVisible() and
                     bb.Intersects(f.Reference().GetBoundingBox()) for f in board.GetFootprints()))
 

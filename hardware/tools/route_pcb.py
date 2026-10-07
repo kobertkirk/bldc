@@ -34,7 +34,7 @@ import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
-from gen_pcb import (COL0, COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO,  # noqa: E402
+from gen_pcb import (COL0, COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO, Y_SHUNT, Y_TERM,  # noqa: E402
                      col_x)  # board geometry
 
 KEEPOUT_Y = Y_CER + 4.0     # inner-layer track keepout ends below the DC-link ceramics
@@ -93,6 +93,38 @@ def plane_keepout(board):
     for x, y in rect(0.2, 0.2, POWER_X + 1.0, KEEPOUT_Y):
         o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
     board.Add(z)
+
+
+def phase_keepout(board):
+    """No tracks on the outer layers across a phase output strip (shunt -> motor
+    terminal) or a switch node: a signal crossing one splits the pour, and that
+    layer then carries none of the motor current.  The notch leaves the
+    shunt's right-hand sense pad free to exit towards its INA240."""
+    ls = pcbnew.LSET()
+    ls.AddLayer(pcbnew.F_Cu)
+    ls.AddLayer(pcbnew.B_Cu)
+    sense_top, sense_bot = Y_SHUNT + 2.3, Y_SHUNT + 4.6
+    for ph in 'ABC':
+        x = col_x(ph)
+        x0, x1, xn = x + SHUNT_X + 2.3, x + COLW - 0.4, x + SHUNT_X + 5.8
+        shapes = [[(x0, Y_HI + 3.5), (x1, Y_HI + 3.5), (x1, Y_TERM), (x0, Y_TERM), (x0, sense_bot),
+                   (xn, sense_bot), (xn, sense_top), (x0, sense_top)],
+                  rect(x + FET_X - 5.3, Y_HI + 3.0, x + SHUNT_X - 2.4, Y_LO + 2.0)]
+        for pts in shapes:
+            z = pcbnew.ZONE(board)
+            z.SetIsRuleArea(True)
+            z.SetDoNotAllowTracks(True)
+            z.SetDoNotAllowVias(False)
+            z.SetDoNotAllowPads(False)
+            z.SetDoNotAllowCopperPour(False)
+            z.SetDoNotAllowFootprints(False)
+            z.SetLayerSet(ls)
+            z.SetZoneName(f'phase {ph} power copper keepout')
+            o = z.Outline()
+            o.NewOutline()
+            for px, py in pts:
+                o.Append(pcbnew.FromMM(px), pcbnew.FromMM(py))
+            board.Add(z)
 
 
 def four_layers():
@@ -568,6 +600,7 @@ def main():
     ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
     ds.SetCustomViaSize(True)
     plane_keepout(board)
+    phase_keepout(board)
     edge_keepout(board)
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
