@@ -200,6 +200,82 @@ def build(board, net, fence=True, soft=False):
     return g
 
 
+def _whole_board(z):
+    bb = z.GetBoundingBox()
+    return to_mm(bb.GetWidth()) > W - 2.0 and to_mm(bb.GetHeight()) > H - 2.0
+
+
+def route_to_pour(board, net, a):
+    """After the pours are filled: from the item at a to any filled copper of
+    the net's own pours (zone fill counts as the target).  Other nets' power
+    pours are obstacles; board-wide flood fills (GND / +3V3) are not, they flow
+    around the new track when the zones are refilled."""
+    g = build(board, net, fence=False)
+    code = board.FindNet(net).GetNetCode()
+    rt, rv = TRACK_W / 2 + CLEAR, VIA_D / 2 + CLEAR
+    goal = [bytearray(g.nx * g.ny) for _ in LAYERS]
+    for z in board.Zones():
+        if z.GetIsRuleArea():
+            continue
+        for k, layer in enumerate(LAYERS):
+            if not z.IsOnLayer(layer):
+                continue
+            fill = z.GetFilledPolysList(layer)
+            if fill.OutlineCount() == 0:
+                continue
+            if z.GetNetCode() == code:
+                inner = pcbnew.SHAPE_POLY_SET(fill)
+                inner.Deflate(pcbnew.FromMM(TRACK_W), 8)
+                if inner.OutlineCount():
+                    g.mark_poly(goal[k], inner)
+            elif not _whole_board(z):
+                for grid, r in ((g.track[k], rt), (g.via, rv)):
+                    infl = pcbnew.SHAPE_POLY_SET(fill)
+                    infl.Inflate(pcbnew.FromMM(r), 8)
+                    g.mark_poly(grid, infl)
+    nx = g.nx
+    sl = item_layers(board, net, *a)
+    si, sj = g.ij(*a)
+    for k in sl:
+        g.track[k][sj * nx + si] = 0
+    pq = [(0.0, si, sj, k) for k in sl]
+    cost = {(si, sj, k): 0.0 for k in sl}
+    came = {(si, sj, k): None for k in sl}
+    end = None
+    while pq:
+        c, i, j, k = heapq.heappop(pq)
+        if c > cost.get((i, j, k), 1e18):
+            continue
+        if goal[k][j * nx + i] and not g.track[k][j * nx + i]:
+            end = (i, j, k)
+            break
+        steps = []
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            a2, b2 = i + di, j + dj
+            if 0 <= a2 < nx and 0 <= b2 < g.ny and not g.track[k][b2 * nx + a2]:
+                if di and dj and (g.track[k][j * nx + a2] or g.track[k][b2 * nx + i]):
+                    continue
+                steps.append((a2, b2, k, DIAG if di and dj else 1.0))
+        if not g.via[j * nx + i]:
+            for k2 in range(len(LAYERS)):
+                if k2 != k and not g.track[k2][j * nx + i]:
+                    steps.append((i, j, k2, VIA_COST))
+        for a2, b2, k2, w in steps:
+            nc = c + w
+            if nc < cost.get((a2, b2, k2), 1e18):
+                cost[(a2, b2, k2)] = nc
+                came[(a2, b2, k2)] = (i, j, k)
+                heapq.heappush(pq, (nc, a2, b2, k2))
+    if end is None:
+        raise SystemExit(f'{net}: no path to its pour')
+    path, n = [], end
+    while n:
+        path.append(n)
+        n = came[n]
+    path.reverse()
+    return g, path
+
+
 def item_layers(board, net, x, y):
     """Layers on which the net's pad / track / via at (x, y) can be reached."""
     q = pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y))

@@ -695,6 +695,39 @@ def grid_finish(board, first=()):
     return done, fails
 
 
+def pour_finish(board):
+    """With the pours filled: an item still cut off from its net (e.g. a DRV8353
+    SHx sense pin whose switch node is only copper pour) is routed by the grid
+    router to the nearest filled copper of its own pours."""
+    import astar_route
+    items, _ = drc(board)
+    done = 0
+    seen = set()
+    for t, locs in [it for it in items if it[0] == 'unconnected_items' and len(it[1]) >= 2]:
+        net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
+        if net in PLANE_NETS:
+            continue
+        zones = [z for z in board.Zones() if not z.GetIsRuleArea() and z.GetNetname() == net]
+        if not zones:
+            continue
+        def in_pour(loc):
+            q = mm(*loc[:2])
+            return any(z.GetFilledPolysList(l).Contains(q) for z in zones for l in z.GetLayerSet().Seq())
+        start = [loc for loc in locs if not in_pour(loc)]
+        if len(start) != 1 or (net, start[0][:2]) in seen:
+            continue
+        a = start[0][:2]
+        seen.add((net, a))
+        try:
+            g, path = astar_route.route_to_pour(board, net, a)
+        except SystemExit:
+            print(f'  no path from {net} at {a} to its pour')
+            continue
+        _add_items(board, net, astar_route.to_hand_route(g, path, a, None))
+        done += 1
+    return done
+
+
 def auto_repair(board, max_tries=400):
     """Close connections the router left open: try short F/B routes (direct,
     L, 45-degree, or via-to-the-other-layer) and keep the first that DRC
@@ -985,6 +1018,10 @@ def main():
     inner_planes(board)
     outer_pours(board)
     fill(board)
+    n = pour_finish(board)
+    if n:
+        print(f'routed {n} connection(s) into their pours')
+        fill(board)
     board.Save(PCB)
     rpt = os.path.join(args.workdir, 'drc.rpt')
     pcbnew.WriteDRCReport(board, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
