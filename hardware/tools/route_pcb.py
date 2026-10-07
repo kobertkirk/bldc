@@ -318,8 +318,16 @@ def patch_dsn(path, board, clearance_um=210):
     txt = re.sub(r'(\(layer In1\.Cu\s*\(type )signal\)', r'\1power)', txt)
     txt = re.sub(r'\n\s*\(net LS_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
     txt = re.sub(r' LS_[ABC](?=[\s)])', '', txt)
+    stuck = {}                     # plane pins with no fan-out via: still the router's job
+    for net, (x, y) in FANOUT_FAILS:
+        for fp in board.GetFootprints():
+            for p in fp.Pads():
+                if p.GetNetname() == net and math.dist(pcbnew.ToMM(p.GetPosition()), (x, y)) < 0.01:
+                    stuck.setdefault(net, []).append(f'{fp.GetReference()}-{p.GetNumber()}')
     for pn in PLANE_NETS:          # nothing left to route: the fan-out vias reach the planes
-        txt = re.sub(r'(\(net %s\n\s*\(pins )(\S+)[^)]*\)' % re.escape(pn), r'\1\2)', txt)
+        keep = ' '.join(stuck.get(pn, []))
+        txt = re.sub(r'(\(net %s\n\s*\(pins )(\S+)[^)]*\)' % re.escape(pn),
+                     lambda m: m.group(1) + m.group(2) + (' ' + keep if keep else '') + ')', txt)
         # and the router must leave the fan-out stubs and vias where they are
         txt = txt.replace(f'(net {pn})(type route)', f'(net {pn})(type fix)')
     motor = [fp.GetReference() for fp in board.GetFootprints() if fp.GetValue().startswith('MOTOR_')]
@@ -828,9 +836,12 @@ def import_ses(board, ses_path, extra_rip=()):
         if net[1] in rip:
             print(f'ripped up the router wiring of {net[1]}')
             continue
-        if net[1] in PLANE_NETS:              # only our own fan-out, already on the board
-            continue
-        ni = board.FindNet(net[1])
+        plane = net[1] in PLANE_NETS        # our own fan-out is already on the board:
+        ni = board.FindNet(net[1])           # take only what the router added to it
+        r2 = lambda q: (round(q[0], 2), round(q[1], 2))                  # noqa: E731
+        have = {r2(pcbnew.ToMM(t.GetStart())) for t in board.GetTracks() if t.GetNetCode() == ni.GetNetCode()} | \
+               {r2(pcbnew.ToMM(t.GetEnd())) for t in board.GetTracks() if t.GetNetCode() == ni.GetNetCode()} \
+            if plane else set()
         ends = {}                                  # point -> set of layers
         for wire in find(net, 'wire'):
             path = find1(wire, 'path')
@@ -843,6 +854,8 @@ def import_ses(board, ses_path, extra_rip=()):
             for q in (pts[0], pts[-1]):
                 ends.setdefault(q, set()).add(layer)
             for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                if plane and r2((x0, y0)) in have and r2((x1, y1)) in have:
+                    continue
                 t = pcbnew.PCB_TRACK(board)
                 t.SetStart(mm(x0, y0))
                 t.SetEnd(mm(x1, y1))
@@ -855,11 +868,15 @@ def import_ses(board, ses_path, extra_rip=()):
         for via in find(net, 'via'):
             q = (round(float(via[2]) * scale, 4), round(-float(via[3]) * scale, 4))
             vias.add(q)
+            if plane and r2(q) in have:
+                continue
             add_via(ni, q[0], q[1], via_sizes.get(via[1], default_via))
             n_vias += 1
         # some Freerouting builds drop vias from the SES: re-insert one wherever
         # the route changes layer and there is no via (or through-hole pad)
         for q, ls in ends.items():
+            if plane:
+                break
             if len(ls) > 1 and q not in vias and not through_hole_at(board, q, ni) and \
                     via_fits(board, q, ni, default_via[0] / 2):
                 REPAIR_VIAS.append(add_via(ni, q[0], q[1], default_via))
