@@ -64,8 +64,14 @@ DRV_POS = (31.5, 51.0)
 BOTTOM = ('mcu', 'io')            # groups placed on the bottom side
 
 
+# Phase columns left to right.  C-B-A follows the DRV8353's pin order around the
+# package (A, B, C counter-clockwise), so no phase's gate and sense lines have to
+# cross another's; the phase names are only labels (auto-detect learns the order).
+COL_ORDER = os.environ.get('BLDC_COLS', 'CBA')
+
+
 def col_x(ph):
-    return COL0 + COLW * 'ABC'.index(ph)
+    return COL0 + COLW * COL_ORDER.index(ph)
 
 
 def mm(x, y):
