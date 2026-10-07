@@ -456,7 +456,8 @@ def via_arrays(board, pitch=1.3, inset=0.65, dia=0.6, drill=0.3):
             net = pad.GetNetname()
             if pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD or not net.startswith(POWER_PAD_NETS):
                 continue
-            if pcbnew.ToMM(pad.GetPosition().x) > POWER_X:      # power stage only
+            if pcbnew.ToMM(pad.GetPosition().x) > POWER_X or \
+                    pcbnew.ToMM(pad.GetPosition().y) > ARRAY_Y:   # power stage only
                 continue
             bb = pad.GetBoundingBox()
             w, h = pcbnew.ToMM(bb.GetWidth()), pcbnew.ToMM(bb.GetHeight())
@@ -477,8 +478,8 @@ def via_arrays(board, pitch=1.3, inset=0.65, dia=0.6, drill=0.3):
                 if not all(pad.HitTest(pcbnew.VECTOR2I(c.x + dx, c.y + dy))
                            for dx, dy in ((r, 0), (-r, 0), (0, r), (0, -r))):
                     continue
-                if not free(x, y, pad.GetNetCode()):
-                    continue
+                if not free(x, y, pad.GetNetCode()) or not via_fits(board, (x, y), pad.GetNet(), dia / 2, 0.2):
+                    continue                    # (via_fits: a pad of another net on the far side)
                 holes.append((x, y, dia / 2, pad.GetNetCode()))
                 v = pcbnew.PCB_VIA(board)
                 v.SetPosition(c)
@@ -727,6 +728,52 @@ def grid_finish(board, first=()):
             print(f'  grid router found no path for {net}')
             fails.append((net, a, b))
     return done, fails
+
+
+def stitch_islands(board, net='GND', step=0.5):
+    """A filled piece of an outer-layer GND pour with no via or through-hole pad
+    in it is an island: put one via in it (to the solid In1 plane)."""
+    ni = board.FindNet(net)
+    code = ni.GetNetCode()
+    drills = [t.GetPosition() for t in board.GetTracks() if t.GetClass() == 'PCB_VIA' and t.GetNetCode() == code]
+    drills += [p.GetPosition() for f in board.GetFootprints() for p in f.Pads()
+               if p.GetNetCode() == code and p.GetDrillSize().x > 0]
+    n = 0
+    for z in board.Zones():
+        if z.GetIsRuleArea() or z.GetNetCode() != code:
+            continue
+        for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+            if not z.IsOnLayer(layer):
+                continue
+            fill = z.GetFilledPolysList(layer)
+            for k in range(fill.OutlineCount()):
+                piece = pcbnew.SHAPE_POLY_SET()
+                piece.AddOutline(fill.Outline(k))
+                if any(piece.Contains(q) for q in drills):
+                    continue
+                inner = pcbnew.SHAPE_POLY_SET(piece)
+                inner.Deflate(pcbnew.FromMM(0.35), 8)
+                if not inner.OutlineCount():
+                    continue
+                bb = inner.BBox()
+                x0, y0 = pcbnew.ToMM(bb.GetX()), pcbnew.ToMM(bb.GetY())
+                x1, y1 = pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom())
+                spots = [(x0 + i * step, y0 + j * step) for i in range(int((x1 - x0) / step) + 1)
+                         for j in range(int((y1 - y0) / step) + 1)]
+                cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                spots.sort(key=lambda q: math.hypot(q[0] - cx, q[1] - cy))
+                for q in spots:
+                    if inner.Contains(mm(*q)) and via_fits(board, q, ni, 0.3, 0.25):
+                        v = pcbnew.PCB_VIA(board)
+                        v.SetPosition(mm(*q))
+                        v.SetWidth(pcbnew.FromMM(0.6))
+                        v.SetDrill(pcbnew.FromMM(0.3))
+                        v.SetNet(ni)
+                        board.Add(v)
+                        drills.append(mm(*q))
+                        n += 1
+                        break
+    return n
 
 
 def pour_finish(board):
@@ -1059,6 +1106,10 @@ def main():
     n = pour_finish(board)
     if n:
         print(f'routed {n} connection(s) into their pours')
+        fill(board)
+    n = stitch_islands(board)
+    if n:
+        print(f'stitched {n} GND pour island(s)')
         fill(board)
     board.Save(PCB)
     rpt = os.path.join(args.workdir, 'drc.rpt')
