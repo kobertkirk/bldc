@@ -295,6 +295,13 @@ HAND_ROUTES = {     # {sha1 of the SES file: [routes]}, filled per routing sessi
     '3ea9f4de44a089cb82b0a6ff3ac9a04d7fcae6f2': [
         ('LATCH_B', ('Q1', '1'), [('F', [(137.73, 55.0), (138.3, 54.4), (141.25, 54.4), (141.25, 59.88)])]),
     ],
+    # rev D: the router left the INA240 B/C supply taps open (paths found by a grid search)
+    'fb745afb3a85808af48dd11c94372f2fe518c995': [
+        ('+3V3', None, [('V', (78.25, 50.48)), ('B', [(78.25, 50.48), (77.2, 57.6), (77.45, 58.09)])]),
+        # phase C: under its motor terminal on B.Cu to a via into the +3V3 plane (In2, x > POWER_X)
+        ('+3V3', None, [('V', (116.25, 50.48)), ('B', [(116.25, 50.48), (120.8, 58.8), (122.4, 60.4),
+                                                       (132.8, 64.6)]), ('V', (132.8, 64.6))]),
+    ],
 }
 
 
@@ -302,13 +309,13 @@ def hand_routes(board, ses_path):
     import hashlib
     digest = hashlib.sha1(open(ses_path, 'rb').read()).hexdigest()
     added = 0
-    for netname, (ref, padnum), segs in HAND_ROUTES.get(digest, []):
+    for netname, ref, segs in HAND_ROUTES.get(digest, []):
         ni = board.FindNet(netname)
-        pad = next(p for p in board.FindFootprintByReference(ref).Pads() if p.GetNumber() == padnum)
-        reached = any(t.GetNetCode() == ni.GetNetCode() and t.GetClass() == 'PCB_TRACK' and
-                      (pad.HitTest(t.GetStart()) or pad.HitTest(t.GetEnd())) for t in board.GetTracks())
-        if reached:
-            continue
+        if ref is not None:                   # skip if the router did reach that pad
+            pad = next(p for p in board.FindFootprintByReference(ref[0]).Pads() if p.GetNumber() == ref[1])
+            if any(t.GetNetCode() == ni.GetNetCode() and t.GetClass() == 'PCB_TRACK' and
+                   (pad.HitTest(t.GetStart()) or pad.HitTest(t.GetEnd())) for t in board.GetTracks()):
+                continue
         for kind, data in segs:
             if kind == 'V':
                 v = pcbnew.PCB_VIA(board)

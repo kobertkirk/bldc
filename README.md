@@ -26,7 +26,7 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The 188 × 74 mm 4-layer PCB (rev C) is **fully routed and passes KiCad DRC with
+> [Verification](#verification)). The 185 × 66 mm 4-layer PCB (rev D) is **fully routed and passes KiCad DRC with
 > 0 violations and 0 unconnected pads**. The power stage is placed by hand (see [Board](#board)); the signal routing
 > was done by an autorouter (Freerouting) plus scripted copper pours, so have it reviewed before ordering.
 > The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
@@ -249,24 +249,28 @@ Terminals close-up: ![terminals](hardware/renders/bldc48-terminals.png)
 
 Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
 In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. The inner
-planes are unbroken under the FETs, DC-link caps and shunts. 1776 track segments, 453 vias, of which 304 are arrays
+planes are unbroken under the FETs, DC-link caps and shunts. 1778 track segments, 459 vias, of which 304 are arrays
 in the FET, shunt and DC-link capacitor pads tying the outer pours and the planes together.
 
-## Rev C: compact layout
+## Rev D: compact layout
 
-Rev C has the same circuit as rev B on a smaller board: **188 × 74 mm instead of 240 × 100 mm (42 % less area)**.
-- The three half-bridge columns are 38 mm wide instead of 50 mm, and the gate driver, shunt and INA240 of each phase
-  pack around its FET pair.
+Rev D has the same circuit as rev B on a much smaller board: **185 × 66 mm**, against 240 × 100 mm for rev B
+(49 % less area) and 188 × 74 mm for rev C (12 % less).
+- The three half-bridge columns are 38 mm wide (rev B: 50 mm). The gate driver, shunt and INA240 of each phase pack
+  around its FET pair.
+- Each motor terminal sits straight below its shunt, level with the DC-link ceramics, instead of at the bottom edge.
+  A 5 mm routing channel for the controller signals runs underneath.
+- The battery strip is 17 mm wide. BAT+ and BAT− are 26 mm apart with the TVS between them.
 - The 220 µF caps sit in one row along the top edge, right on the +48 V pour.
 - The buck inductors are 8 × 8 mm Bourns SRN8040TA instead of 12 × 12 mm SRR1260. The 12 V and 5 V loads are only
   a few hundred mA, so the smaller parts still have plenty of saturation margin.
-- The logic, supplies and connectors fill a 52 mm strip on the right.
-- The M5 battery and motor terminals keep their positions relative to the bridges: battery on the left edge, each
-  motor terminal straight below its shunt.
+- The logic, supplies and connectors fill a 52 mm strip on the right. A skyline packer (with 90° rotation of small
+  parts) fills it far more tightly than the earlier row packer.
 
-The price of the smaller board is less copper. Each phase output is a 7.3 mm pour on both outer layers (2 oz), about
-35 mm long. By IPC-2221 that carries about 55 A at a 30 °C rise, which covers the 60 A peak / ≈ 42 A rms phase limit,
-but with less margin than rev B. Keep the 2 oz outer copper and the heat-spreader plate.
+Each phase output is a 7.3 mm pour on both outer layers (2 oz), about 20 mm from shunt to terminal. By IPC-2221 that
+carries about 55 A at a 30 °C rise, which covers the 60 A peak / ≈ 42 A rms phase limit. Outer-layer rule areas keep
+every signal track off these strips. In rev C, signals crossed the phase B and C strips and cut the pour on one layer,
+so only one layer carried the motor current there. Keep the 2 oz outer copper and the heat-spreader plate.
 
 ## Ordering from JLCPCB (rough cost)
 
@@ -275,23 +279,23 @@ real quote, because their prices change often.
 
 | Item (order of 5 assembled boards) | Approx. |
 |---|---|
-| 4-layer PCB 188 × 74 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
+| 4-layer PCB 185 × 66 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
 | PCBA setup + stencil (economic) | ≈ $10 |
 | "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
-| SMT + through-hole joints (connectors only, see the caps below) | ≈ $12 |
-| Parts JLCPCB supplies from LCSC (≈ $26/board) | ≈ $130 |
-| JLCPCB shipping (DHL / FedEx) | $20–35 |
-| 40 × 220 µF/100 V caps bought separately (Digi-Key/Mouser, ≈ $1–1.20 each, incl. shipping) | $45–55 |
-| **Total for 5** | **≈ $330–390, about $66–78 per board** |
+| SMT + through-hole joints (≈ 700 SMT + ≈ 45 THT per board) | ≈ $13 |
+| Parts (≈ $27/board, all from LCSC) | ≈ $135 |
+| Shipping (DHL / FedEx) | $20–35 |
+| **Total for 5** | **≈ $295–340, about $59–68 per board** |
 
 Every part in the BOM has an LCSC part number or is a generic resistor/capacitor/diode/connector that LCSC stocks in
-quantity, **except the 220 µF/100 V bulk capacitors**. LCSC has almost no 12.5 mm, 100 V, low-ESR caps in stock
-(Panasonic EEU-FS2A221 C264064 and Rubycon 100ZLH220MEFCG412.5X25 C441624 both show 0–31 pcs). The other
-220 µF/100 V parts LCSC does stock are 16 mm wide or 2000 h general-purpose types that do not fit or cannot take the
-ripple. Buy the Panasonic EEU-FS2A221 (1.8 A ripple) or Rubycon 100ZLH220MEFC12.5X25 (1.62 A) from Digi-Key/Mouser
-and solder the 8 through-hole caps yourself, or add them through JLCPCB's global sourcing. Both are below the 2.1 A
-worst case (35 A battery at 50 % duty), but that rating is at 105 °C. Check the temperature multiplier in the
-datasheet for your ambient, or limit the battery current.
+quantity, so JLCPCB can build the whole board.
+- The bulk capacitors are Aishi ERS1KM221W25OT (C106684): 220 µF/100 V, 12.5 × 25 mm, 10 000 h at 105 °C, same
+  footprint. The Panasonic EEU-FS2A221 and Rubycon 100ZLH220MEFC12.5X25 are better parts (1.8 A / 1.62 A ripple),
+  but LCSC has almost none in stock.
+- I could not read Aishi's ripple rating, because the datasheet was not reachable from here. A smaller part in the
+  same series (100 µF, 10 × 13 mm) is rated 0.75 A, so expect about 1.5 A for this size.
+- Worst-case ripple is 2.1 A per cap (35 A battery at 50 % duty). Check the datasheet. If the caps run hot at full
+  power, swap in the Panasonic/Rubycon parts (hand-solder or global sourcing) or lower `i_batt_max`.
 
 The 33 µH inductor: use the Bourns SRN8040TA-330M if JLCPCB has it, otherwise the YJYCOIN YNR8040-330M (C497847),
 an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
@@ -304,6 +308,10 @@ an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
 - Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
   220 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
 - Set the stackup to 2 oz outer copper. JLCPCB's cheap 4-layer offer is 1 oz.
+- JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
+  2-board order is still about $190, so most of the cost of a small order is fees.
+- Board size: 185 × 66 mm (7.3 × 2.6 in), 1.6 mm thick. The 220 µF caps are the tallest parts, so the assembled
+  board is about 27 mm tall. Four M3 mounting holes sit 4 mm in from each corner (177 × 58 mm hole spacing).
 
 ## Design review (rev B)
 
@@ -330,7 +338,8 @@ simulation passes on two motors including the new overcurrent test.
 ## PCB layout rules
 
 * Use 4 layers with 2 oz outer copper. Run 35 A battery and phase paths as wide pours on two or more layers,
-  stitched with many vias. Rev C's phase pours are 7.3 mm wide on both outer layers. Do not narrow them further.
+  stitched with many vias. The phase pours are 7.3 mm wide on both outer layers, kept free of signal tracks by
+  rule areas. Do not narrow them further.
 * Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. Put the 220 µF caps right
   next to the bridges.
 * Give the FET drain/source pads thermal-via arrays down to a bottom pour. Bolt the board to an aluminium plate or the

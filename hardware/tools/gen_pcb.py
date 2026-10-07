@@ -381,7 +381,7 @@ def main():
 
     # silkscreen: polarity and phase labels next to the terminals
     labels = [('48V 35A BLDC  rev D', LX + 12, H - 1.5, 1.0),
-              ('BAT+', BAT_POS['BAT+'][0] + 0.5, BAT_POS['BAT+'][1] + 6.9, 1.5),
+              ('BAT+', BAT_POS['BAT+'][0] + 2.5, BAT_POS['BAT+'][1] - 7.4, 1.5),   # above: TVS below
               ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 6.9, 1.5)]
     labels += [(f'MOTOR {ph}', col_x(ph) + TERM_X, Y_TERM + 7.3, 1.2) for ph in 'ABC']
     for txt, x, y, size in labels:
