@@ -730,6 +730,65 @@ def grid_finish(board, first=()):
     return done, fails
 
 
+def nudge_fanout(board):
+    """A GND fan-out via that DRC finds too close to a routed track of another
+    net (Freerouting does not always keep clear of fixed vias) moves, with its
+    stub, to the nearest spot around its pad that keeps clearance."""
+    items, _ = drc(board)
+    bad = set()
+    for t, locs in items:
+        if t in ('clearance', 'hole_clearance', 'hole_near_hole', 'solder_mask_bridge'):
+            for x, y, d in locs:
+                if d.startswith('Via [GND]'):
+                    bad.add((round(x, 3), round(y, 3)))
+    if not bad:
+        return 0
+    ni = board.FindNet('GND')
+    tracks = list(board.GetTracks())
+    moved = 0
+    for v in tracks:
+        if v.GetClass() != 'PCB_VIA' or v.GetNetCode() != ni.GetNetCode():
+            continue
+        vx, vy = pcbnew.ToMM(v.GetPosition())
+        if (round(vx, 3), round(vy, 3)) not in bad:
+            continue
+        stub = next((t for t in tracks if t.GetClass() == 'PCB_TRACK' and t.GetNetCode() == ni.GetNetCode()
+                     and (t.GetEnd() == v.GetPosition() or t.GetStart() == v.GetPosition())), None)
+        if stub is None:
+            continue
+        if stub.GetEnd() != v.GetPosition():
+            s, e = stub.GetEnd(), stub.GetStart()
+            stub.SetStart(s)
+            stub.SetEnd(e)
+        px, py = pcbnew.ToMM(stub.GetStart())
+        w = pcbnew.ToMM(stub.GetWidth())
+        old = v.GetPosition()
+        v.SetPosition(mm(-50, -50))              # out of the way while testing spots
+        stub.SetEnd(stub.GetStart())
+        best = None
+        for d in (0.9, 1.1, 1.3, 1.6, 2.0, 2.5):
+            for k in range(24):
+                a = k * math.pi / 12
+                q = (round(px + d * math.cos(a), 3), round(py + d * math.sin(a), 3))
+                if not via_fits(board, q, ni, 0.3, 0.25):
+                    continue
+                n = max(2, int(d / 0.1))
+                if all(via_fits(board, (px + (q[0] - px) * j / n, py + (q[1] - py) * j / n), ni, w / 2, 0.21)
+                       or j < 4 for j in range(1, n)):
+                    best = q
+                    break
+            if best:
+                break
+        if best:
+            v.SetPosition(mm(*best))
+            stub.SetEnd(mm(*best))
+            moved += 1
+        else:
+            v.SetPosition(old)
+            stub.SetEnd(old)
+    return moved
+
+
 def stitch_islands(board, net='GND', step=0.5):
     """A filled piece of an outer-layer GND pour with no via or through-hole pad
     in it is an island: put one via in it (to the solid In1 plane)."""
@@ -1099,6 +1158,9 @@ def main():
         print(f'round {rnd + 1}: ripping up {sorted(new)}')
     if rip:
         print(f'RIP_UP for this SES: {sorted(rip)}')
+    n = nudge_fanout(board)
+    if n:
+        print(f'moved {n} fan-out via(s) clear of the routing')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
     outer_pours(board)

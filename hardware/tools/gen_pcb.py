@@ -277,8 +277,8 @@ def place_at_pins(items, ic, regions, gap):
                 pins.setdefault(p.GetNetname(), []).append((x, y))
     boxes, placed_nets = [], {}
 
-    def nets(fp):
-        return {p.GetNetname() for p in fp.Pads() if p.GetNetname() not in ('GND', '')}
+    def nets(fp):                     # sorted: set order changes from run to run
+        return sorted({p.GetNetname() for p in fp.Pads() if p.GetNetname() not in ('GND', '')})
 
     def target(fp):
         on = [q for n in nets(fp) for q in pins.get(n, [])]
