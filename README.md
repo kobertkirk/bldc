@@ -142,7 +142,7 @@ drivers through 4.7 Ω gate resistors (≈100 ns edges, ≈1.7 W switching loss 
 20 kHz centre-aligned complementary PWM with 400 ns hardware dead time. With the main output disabled, all six gates
 are held low.
 
-**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Isabellenhütte BVR 4026, 5 W),
+**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Bourns CSS4J-4026R-L500F or Isabellenhütte BVR 4026, 5 W),
 read through its separate sense pads by an INA240A1. The INA240A1 has gain 20, rejects the PWM common-mode swing,
 accepts −4 to 80 V common mode and is biased to mid-rail. Full scale is ±165 A per phase, comfortably above the 80 A
 hard trip (a compile-time check enforces this). Sensing in the phase lines means the current is valid at every moment, including during coasting.
@@ -285,8 +285,11 @@ real quote, because their prices change often.
 
 - JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
   2-board order is still about $200, so most of the cost of a small order is fees.
-- LCSC (JLCPCB's parts store) does not stock the Isabellenhütte BVR 4026 shunts (≈ $3.50 each from Bürklin or RS).
-  Order them through JLCPCB's global sourcing, or solder the three shunts yourself.
+- LCSC (JLCPCB's parts store) does not stock the Isabellenhütte BVR 4026 shunts. Use the Bourns
+  CSS4J-4026R-L500F instead (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal, 10.06 × 6.60 mm). Its recommended
+  land pattern has the same 10.6 mm span, 5.6 mm current pads and 0.9 mm sense pads as the BVR 4026 footprint on the
+  board, so no layout change is needed. Check it against the Bourns datasheet before ordering. Avoid 3 % parts such as
+  the Milliohm HOVB4026-5W-0.5mR-3%: they add up to 3 % gain error to every current reading.
 - Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
   220 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
 - Set the stackup to 2 oz outer copper. JLCPCB's cheap 4-layer offer is 1 oz.
