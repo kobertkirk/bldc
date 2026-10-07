@@ -133,7 +133,7 @@ def phase_keepout(board):
 PLANE_NETS = ('GND',)            # reaches the solid In1 plane through fan-out vias
 
 
-def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0), via_d=0.6, drill=0.3, stub_w=0.3):
+def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, drill=0.3, stub_w=0.3):
     """Give every GND / +3V3 SMD pad outside the power array its own via into
     the solid In1 GND plane, with a short stub.  The autorouter
     then never has to draw these nets, which is most of the congestion on a
@@ -206,6 +206,26 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0), via_d=0.6, drill=0.3, st
                         break
                 if done:
                     break
+            if not done:
+                # a ground pin next to the part's own exposed pad: tie it straight across
+                ep = [q for q in fp.Pads() if q.GetNetCode() == pad.GetNetCode() and q.GetNumber() != pad.GetNumber()
+                      and q.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and q.IsOnLayer(layer)
+                      and pcbnew.ToMM(q.GetBoundingBox().GetWidth()) > 2.0]
+                for q in ep:
+                    qx, qy = pcbnew.ToMM(q.GetPosition().x), pcbnew.ToMM(q.GetPosition().y)
+                    L = math.hypot(qx - px, qy - py)
+                    ex, ey = px + (qx - px) * min(1.0, 1.6 / L), py + (qy - py) * min(1.0, 1.6 / L)
+                    if q.HitTest(mm(ex, ey)) and ok_stub((px, py), (ex, ey), layer, pad.GetNetCode()):
+                        t = pcbnew.PCB_TRACK(board)
+                        t.SetStart(mm(px, py))
+                        t.SetEnd(mm(ex, ey))
+                        t.SetWidth(pcbnew.FromMM(0.25))
+                        t.SetLayer(layer)
+                        t.SetNet(pad.GetNet())
+                        board.Add(t)
+                        added += 1
+                        done = True
+                        break
             if not done:
                 print(f'  no fan-out spot for {fp.GetReference()} pad {pad.GetNumber()} ({pad.GetNetname()})')
     return added
