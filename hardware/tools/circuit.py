@@ -187,7 +187,7 @@ S = 'bridge'
 # DC-link capacitance: 8 x 220 uF/100 V low-ESR (~17 A rms ripple at 35 A ->
 # ~2.1 A per cap) + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
 for i in range(8):
-    CP(S, '220u/100V', '+48V', 'GND', MPN='Panasonic EEU-FS2A221 or Rubycon 100ZLH220MEFC12.5X25 (12.5x25 mm, 5 mm pitch, low-ESR); not stocked at LCSC: global sourcing or hand-solder')
+    CP(S, '220u/100V', '+48V', 'GND', MPN='Aishi ERS1KM221W25OT (LCSC C106684), 12.5x25 mm, 5 mm pitch; alt. Panasonic EEU-FS2A221')
 for i in range(6):
     C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
 

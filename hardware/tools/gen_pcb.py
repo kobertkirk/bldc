@@ -10,15 +10,16 @@ here: route_pcb.py routes this placement and adds planes/pours.
 
 Board plan (mm, origin top-left, power flows left -> right -> down):
 
-  x 0..20     battery strip: BAT+ / BAT- M5 bolt terminals on the left edge,
-              36 mm apart, TVS between them, bus-voltage divider below
-  x 20..134   bulk capacitors along the top edge, then one 38 mm column per
+  x 0..17     battery strip: BAT+ / BAT- M5 bolt terminals on the left edge,
+              26 mm apart, TVS between them, bus-voltage divider below
+  x 17..131   bulk capacitors along the top edge, then one 38 mm column per
               phase:  [gate driver | high FET over low FET | Kelvin shunt]
               - both FETs drain-tab up: the switch node is the short gap
                 between the high-side source leads and the low-side tab
               - DC-link ceramics directly under the low-side source leads
-              - motor terminal on the bottom edge straight below the shunt
-  x 136..188  controller: bucks, LDO, power latch, MCU, connectors
+              - motor terminal straight below the shunt, beside the ceramics;
+                a routing channel for the controller signals runs under it
+  x 132.5..W  controller: bucks, LDO, power latch, MCU, connectors
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
@@ -33,22 +34,22 @@ from gen_schematic import Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 188.0, 74.0           # board size, mm
+W, H = 185.0, 66.0           # board size, mm
 GAP = 1.5                    # min spacing between packed courtyards (room for fan-out vias)
 
 # power-stage geometry (shared with route_pcb.py)
-COL0, COLW = 20.0, 38.0      # first phase column x, column pitch
-POWER_X = COL0 + 3 * COLW    # 134: power stage left of this, controller right
+COL0, COLW = 17.0, 38.0      # first phase column x, column pitch
+POWER_X = COL0 + 3 * COLW    # 131: power stage left of this, controller right
 Y_HI, Y_LO = 25.0, 40.0      # FET centres (switch-node gap between them)
 Y_DRV = (Y_HI + Y_LO) / 2    # gate driver centre
 Y_SHUNT = 33.0
 Y_INA = 46.0
 Y_CER = 52.5                 # DC-link ceramics under the low-side sources
-Y_TERM = H - 9.5             # motor terminal centres (bottom edge)
+Y_TERM = 55.5                # motor terminal centres, level with the ceramics
 # x offsets inside a phase column
 DRV_X, FET_X, SHUNT_X, INA_X, TERM_X, CER_DX = 5.5, 16.5, 28.0, 26.0, 32.5, 3.4
-BAT_POS = {'BAT+': (10.0, 12.0), 'BAT-': (10.0, 42.0)}
-TVS_POS = (10.0, 27.0)
+BAT_POS = {'BAT+': (9.5, 12.5), 'BAT-': (9.5, 38.5)}
+TVS_POS = (9.5, 25.5)
 
 
 def col_x(ph):
@@ -154,45 +155,90 @@ def role_of(c, ina_caps):
 
 
 # Packing regions: list of (x0, y0, x1, y1) filled in order
+LX = POWER_X + 1.5            # controller area: two sub-columns
+LM = LX + 24.0
 REGIONS = {
-    'bulk':      [(COL0, 1.5, POWER_X, 16.5)],
-    'bus_sense': [(0.5, 49, 19.5, 66)],
-    'buck12':    [(136, 1.5, 160, 22.5)],
-    'buck5':     [(136, 23, 160, 44)],
-    'ldo':       [(136, 44.5, 160, 53)],
-    'latch':     [(136, 53.5, 160, 72.5)],
-    'mcu':       [(160.5, 1.5, 180, 24), (180, 8.5, 187.5, 24)],
-    'io':        [(160.5, 24.5, 187.5, 42)],
-    'conn':      [(160.5, 42.5, 187.5, 66), (160.5, 66, 180, 72.5)],
+    'bulk':      [(COL0, 1.5, POWER_X + 1.0, 16.5)],
+    'bus_sense': [(0.5, 45, 16.5, 57.5), (8.0, 57.5, 16.5, H - 0.8)],
+    'buck12':    [(LX, 1.5, LM, 18.0)],
+    'buck5':     [(LX, 18.5, LM, 36.5)],
+    'ldo':       [(LX, 37, LM, 46.5)],
+    'latch':     [(LX, 47, LM, H - 0.8)],
+    'mcu':       [(LM + 0.5, 1.5, W - 8, 19.5), (W - 8, 8, W - 0.5, 19.5)],
+    'io':        [(LM + 0.5, 20, W - 0.5, 37.5)],
+    'conn':      [(LM + 0.5, 38, W - 0.5, H - 8.0), (LM + 0.5, H - 8.0, W - 8, H - 0.5)],
 }
 GROUP_GAP = {'bulk': 1.0}
 for _ph in 'ABC':
     _x = col_x(_ph)
     REGIONS[f'drv{_ph}'] = [(_x + 0.3, 17, _x + 10.8, Y_DRV - 2.9), (_x + 0.3, Y_DRV + 2.9, _x + 10.8, H - 1)]
-    REGIONS[f'sense{_ph}'] = [(_x + 22.0, Y_INA + 3.5, _x + 30.0, Y_TERM - 6.0)]
+    REGIONS[f'sense{_ph}'] = [(_x + 21.8, Y_INA + 3.0, _x + 26.8, Y_CER + 6.0)]
 
 
-def pack(items, regions, gap=GAP):
-    """Pack footprints left-to-right, top-to-bottom into the regions in turn."""
-    ri = 0
-    x0, y0, x1, y1 = regions[ri]
-    x, y, row = x0, y0, 0.0
-    for fp, (w, h, cx, cy) in items:
-        w += gap
-        h += gap
-        while True:
-            if x + w > x1 and x > x0:
-                x, y, row = x0, y + row, 0.0
-            if y + h <= y1 + 0.01 or ri == len(regions) - 1:
+def _skyline_fit(sky, x0, x1, y1, w, h):
+    """Lowest-then-leftmost spot for a w x h box on a skyline [(x, width, y)], or None."""
+    best = None
+    for i, (sx, _, _) in enumerate(sky):
+        if sx + w > x1 + 1e-6:
+            break
+        top, span, j = 0.0, 0.0, i
+        while span < w - 1e-6:
+            top = max(top, sky[j][2])
+            span += sky[j][1]
+            j += 1
+        if top + h <= y1 + 1e-6 and (best is None or (top, sx) < (best[0], best[1])):
+            best = (top, sx)
+    return best
+
+
+def _skyline_add(sky, x, w, top):
+    out = []
+    for sx, sw, sy in sky:
+        ex = sx + sw
+        if ex <= x or sx >= x + w:
+            out.append((sx, sw, sy))
+            continue
+        if sx < x:
+            out.append((sx, x - sx, sy))
+        if ex > x + w:
+            out.append((x + w, ex - x - w, sy))
+    out.append((x, w, top))
+    out.sort()
+    merged = []
+    for seg in out:                      # merge equal-height neighbours
+        if merged and abs(merged[-1][2] - seg[2]) < 1e-6 and \
+                abs(merged[-1][0] + merged[-1][1] - seg[0]) < 1e-6:
+            merged[-1] = (merged[-1][0], merged[-1][1] + seg[1], seg[2])
+        else:
+            merged.append(seg)
+    sky[:] = merged
+
+
+def pack(items, regions, gap=GAP, rotate=True):
+    """Bottom-left skyline packing into the regions in turn (first region that fits).
+    Two-pin parts and ICs may be turned 90 degrees to fill gaps; connectors are not."""
+    skies = [[(x0, x1 - x0, y0)] for x0, y0, x1, y1 in regions]
+    for fp, size in items:
+        rots = [fp.GetOrientationDegrees()]
+        if rotate and not fp.GetReference().startswith('J'):
+            rots.append(rots[0] + 90)
+        placed = None
+        for k, (x0, y0, x1, y1) in enumerate(regions):
+            for rot in rots:
+                fp.SetOrientationDegrees(rot)
+                w, h, cx, cy = size_of(fp)
+                spot = _skyline_fit(skies[k], x0, x1, y1, w + gap, h + gap)
+                if spot and (placed is None or (spot[0] + h, spot[1]) < placed[0]):
+                    placed = ((spot[0] + h, spot[1]), k, rot, spot, (w, h, cx, cy))
+            if placed:
                 break
-            ri += 1
-            x0, y0, x1, y1 = regions[ri]
-            x, y, row = x0, y0, 0.0
-        if y + h > y1 + 0.01:
+        if placed is None:
             print(f'warning: regions {regions} overflow at {fp.GetReference()}')
-        fp.SetPosition(mm(x + w / 2 - cx, y + h / 2 - cy))
-        x += w
-        row = max(row, h)
+            continue
+        _, k, rot, (top, x), (w, h, cx, cy) = placed
+        fp.SetOrientationDegrees(rot)
+        fp.SetPosition(mm(x + (w + gap) / 2 - cx, top + (h + gap) / 2 - cy))
+        _skyline_add(skies[k], x, w + gap, top + h + gap)
 
 
 def place_power(groups):
@@ -223,14 +269,15 @@ def place_power(groups):
 def unclash_refs(board):
     """Move a reference off a neighbour's silkscreen or reference (copper is
     untouched, so routing stays valid); hide it if no nearby spot is free."""
-    silk = [(f, g.GetBoundingBox()) for f in board.GetFootprints() for g in f.GraphicalItems()
-            if g.GetLayer() == pcbnew.F_SilkS and g.GetClass() != 'PCB_TEXT']
+    # (SWIG hands out a new proxy per call, so footprints are compared by reference)
+    silk = [(f.GetReference(), g.GetBoundingBox()) for f in board.GetFootprints()
+            for g in f.GraphicalItems() if g.GetLayer() == pcbnew.F_SilkS and g.GetClass() != 'PCB_TEXT']
 
     def clashes(fp):
-        bb = fp.Reference().GetBoundingBox()
-        return (any(f is not fp and bb.Intersects(b) for f, b in silk) or
-                any(f is not fp and f.Reference().IsVisible() and bb.Intersects(f.Reference().GetBoundingBox())
-                    for f in board.GetFootprints()))
+        me, bb = fp.GetReference(), fp.Reference().GetBoundingBox()
+        return (any(r != me and bb.Intersects(b) for r, b in silk) or
+                any(f.GetReference() != me and f.Reference().IsVisible() and
+                    bb.Intersects(f.Reference().GetBoundingBox()) for f in board.GetFootprints()))
 
     for fp in board.GetFootprints():
         ref = fp.Reference()
@@ -329,9 +376,9 @@ def main():
     board.Add(rect)
 
     # silkscreen: polarity and phase labels next to the terminals
-    labels = [('48V 35A BLDC  rev C', 170, H - 1.5, 1.0),
-              ('BAT+', BAT_POS['BAT+'][0] + 0.5, BAT_POS['BAT+'][1] + 7.5, 1.5),
-              ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 7.5, 1.5)]
+    labels = [('48V 35A BLDC  rev D', LX + 12, H - 1.5, 1.0),
+              ('BAT+', BAT_POS['BAT+'][0] + 0.5, BAT_POS['BAT+'][1] + 6.9, 1.5),
+              ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 6.9, 1.5)]
     labels += [(f'MOTOR {ph}', col_x(ph) + TERM_X, Y_TERM + 7.3, 1.2) for ph in 'ABC']
     for txt, x, y, size in labels:
         t = pcbnew.PCB_TEXT(board)

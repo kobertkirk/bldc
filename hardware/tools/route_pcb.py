@@ -34,11 +34,11 @@ import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
-from gen_pcb import (COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO,  # noqa: E402
+from gen_pcb import (COL0, COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO,  # noqa: E402
                      col_x)  # board geometry
 
-KEEPOUT_Y = Y_LO + 23.0     # inner-layer track keepout ends below the shunts/INA240s
-COL0_STRIP = 19.5           # right edge of the battery-terminal strip
+KEEPOUT_Y = Y_CER + 4.0     # inner-layer track keepout ends below the DC-link ceramics
+COL0_STRIP = COL0 - 0.5     # right edge of the battery-terminal strip
 
 
 def mm(x, y):
