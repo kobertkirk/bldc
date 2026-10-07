@@ -41,19 +41,22 @@ HARD_NETS = ('GND', '+48V', '+3V3', '+5V', 'SW_', 'LS_')   # never ripped up
 
 
 class Grid:
-    def __init__(self):
-        self.nx = int(W / G) + 1
-        self.ny = int((H - OY) / G) + 1
+    def __init__(self, origin=None):
+        # grid offset: the route's start pin sits on a grid point, so a 0.5 mm
+        # pitch pin always has a free first step between its neighbours
+        self.ox, self.oy = (0.0, OY) if origin is None else (origin[0] % G, origin[1] % G)
+        self.nx = int((W - self.ox) / G) + 1
+        self.ny = int((H - self.oy) / G) + 1
         n = self.nx * self.ny
         self.track = [bytearray(n) for _ in LAYERS]     # 1 = a track centre here clashes
         self.via = bytearray(n)                         # 1 = a via centre here clashes
         self.soft = None                                # cell -> nets that could be ripped up
 
     def xy(self, i, j):
-        return i * G, OY + j * G
+        return self.ox + i * G, self.oy + j * G
 
     def ij(self, x, y):
-        return round(x / G), round((y - OY) / G)
+        return round((x - self.ox) / G), round((y - self.oy) / G)
 
     def cells_disc(self, x, y, r):
         out = []
@@ -105,8 +108,8 @@ class Grid:
 
     def mark_box(self, grid, x0, y0, x1, y1, r):
         """Cells whose centre lies within r of the box (exact bounds, no rounding out)."""
-        i0, i1 = math.ceil((x0 - r) / G - 1e-9), math.floor((x1 + r) / G + 1e-9)
-        j0, j1 = math.ceil((y0 - r - OY) / G - 1e-9), math.floor((y1 + r - OY) / G + 1e-9)
+        i0, i1 = math.ceil((x0 - r - self.ox) / G - 1e-9), math.floor((x1 + r - self.ox) / G + 1e-9)
+        j0, j1 = math.ceil((y0 - r - self.oy) / G - 1e-9), math.floor((y1 + r - self.oy) / G + 1e-9)
         for j in range(max(j0, 0), min(j1 + 1, self.ny)):
             for i in range(max(i0, 0), min(i1 + 1, self.nx)):
                 grid[j * self.nx + i] = 1
@@ -122,8 +125,8 @@ class Grid:
                     grid[j * self.nx + i] = 1
 
 
-def build(board, net, fence=True, soft=False):
-    g = Grid()
+def build(board, net, fence=True, soft=False, origin=None):
+    g = Grid(origin)
     code = board.FindNet(net).GetNetCode()
     rt, rv = TRACK_W / 2 + CLEAR, VIA_D / 2 + CLEAR
     if soft:
@@ -210,7 +213,7 @@ def route_to_pour(board, net, a):
     the net's own pours (zone fill counts as the target).  Other nets' power
     pours are obstacles; board-wide flood fills (GND / +3V3) are not, they flow
     around the new track when the zones are refilled."""
-    g = build(board, net, fence=False)
+    g = build(board, net, fence=False, origin=a)
     code = board.FindNet(net).GetNetCode()
     rt, rv = TRACK_W / 2 + CLEAR, VIA_D / 2 + CLEAR
     goal = [bytearray(g.nx * g.ny) for _ in LAYERS]
@@ -298,7 +301,7 @@ SOFT_COST = 40.0
 def route(board, net, a, b, to_plane=False, fence=True, soft=False):
     """A* path; with soft=True other signal nets may be crossed at a cost, and
     the result also returns the set of nets that would have to be ripped up."""
-    g = build(board, net, fence, soft)
+    g = build(board, net, fence, soft, origin=a)
     sl = item_layers(board, net, *a)
     gl = [] if to_plane else item_layers(board, net, *b)
     si, sj = g.ij(*a)

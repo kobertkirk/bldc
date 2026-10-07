@@ -681,12 +681,12 @@ def grid_finish(board, first=()):
         if _pour_joined(net, locs):
             continue
         a, b = locs[0][:2], locs[1][:2]
-        for fence in (True, False):
+        for fence, (p, q) in ((True, (a, b)), (True, (b, a)), (False, (a, b)), (False, (b, a))):
             try:
-                g, path = astar_route.route(board, net, a, b, fence=fence)
+                g, path = astar_route.route(board, net, p, q, fence=fence)
             except SystemExit:
                 continue
-            _add_items(board, net, astar_route.to_hand_route(g, path, a, b))
+            _add_items(board, net, astar_route.to_hand_route(g, path, p, q))
             done += 1
             break
         else:
@@ -927,6 +927,9 @@ def main():
     ap.add_argument('--legacy', action='store_true',
                     help='Freerouting 1.x command line (needs a display: runs under xvfb-run)')
     ap.add_argument('--ses', help='skip routing and import this SES file')
+    ap.add_argument('--avoid-ses', action='store_true',
+                    help='second fan-out pass keeps clear of the SES wiring (for an SES routed '
+                         'before that pass existed)')
     ap.add_argument('--no-short-repair', action='store_true',
                     help='skip the DRC-checked short repairs (slow on a dense board) and go '
                          'straight to the grid router')
@@ -947,7 +950,7 @@ def main():
     plane_keepout(board)
     phase_keepout(board)
     edge_keepout(board)
-    avoid = ses_obstacles(args.ses)
+    avoid = ses_obstacles(args.ses) if args.avoid_ses else ((), ())
     print(f'fan-out: {fanout(board, avoid=avoid)} plane vias')
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
