@@ -97,8 +97,8 @@ def plane_keepout(board):
 
 def phase_keepout(board):
     """No tracks on the outer layers across a phase output strip (shunt -> motor
-    terminal) or a switch node: a signal crossing one splits the pour, and that
-    layer then carries none of the motor current.  The notch leaves the
+    terminal): a signal crossing one splits the pour, and that layer then
+    carries none of the motor current.  The notch leaves the
     shunt's right-hand sense pad free to exit towards its INA240."""
     ls = pcbnew.LSET()
     ls.AddLayer(pcbnew.F_Cu)
@@ -108,8 +108,7 @@ def phase_keepout(board):
         x = col_x(ph)
         x0, x1, xn = x + SHUNT_X + 2.3, x + COLW - 0.4, x + SHUNT_X + 5.8
         shapes = [[(x0, Y_HI + 3.5), (x1, Y_HI + 3.5), (x1, Y_TERM), (x0, Y_TERM), (x0, sense_bot),
-                   (xn, sense_bot), (xn, sense_top), (x0, sense_top)],
-                  rect(x + FET_X - 5.3, Y_HI + 3.0, x + SHUNT_X - 2.4, Y_LO + 2.0)]
+                   (xn, sense_bot), (xn, sense_top), (x0, sense_top)]]
         for pts in shapes:
             z = pcbnew.ZONE(board)
             z.SetIsRuleArea(True)
@@ -161,6 +160,10 @@ def patch_dsn(path, clearance_um=210):
     (Specctra coordinates are rounded on the way back)."""
     txt = open(path).read()
     txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
+    # the phase outputs (shunt pad -> motor terminal) are made by the pours, and
+    # their strips are keep-outs for tracks: leave them out of the router's work
+    txt = re.sub(r'\n\s*\(net PHASE_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
+    txt = re.sub(r' PHASE_[ABC](?=[\s)])', '', txt)
     open(path, 'w').write(txt)
 
 
@@ -440,6 +443,8 @@ def auto_repair(board, max_tries=400):
         if len(locs) < 2:
             continue
         net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
+        if net.startswith('PHASE_'):          # joined by the pours added afterwards
+            continue
         ni = board.FindNet(net)
         ea, eb = _endpoints(board, *locs[0]), _endpoints(board, *locs[1])
         if not ea or not eb:
