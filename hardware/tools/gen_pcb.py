@@ -26,6 +26,7 @@ Board plan, rev F (mm, origin top-left, top view), 90 x 68.5 mm:
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
+import math
 import os
 import sys
 
@@ -262,6 +263,92 @@ def pack(items, regions, gap=GAP, rotate=True):
         _skyline_add(skies[k], x, w + gap, top + h + gap)
 
 
+def place_at_pins(items, ic, regions, gap):
+    """Each passive next to the DRV8353 pin(s) it connects to (just outside the
+    fan-out ring), or next to an already placed part it shares a net with; the
+    rest are packed.  Candidate spots spiral out from the target."""
+    c = ic.GetPosition()
+    icx, icy = pcbnew.ToMM(c.x), pcbnew.ToMM(c.y)
+    pins = {}
+    for p in ic.Pads():
+        if p.GetNetname() not in ('GND', '') and p.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
+            x, y = pcbnew.ToMM(p.GetPosition().x), pcbnew.ToMM(p.GetPosition().y)
+            if max(abs(x - icx), abs(y - icy)) > 3.0:
+                pins.setdefault(p.GetNetname(), []).append((x, y))
+    boxes, placed_nets = [], {}
+
+    def nets(fp):
+        return {p.GetNetname() for p in fp.Pads() if p.GetNetname() not in ('GND', '')}
+
+    def target(fp):
+        on = [q for n in nets(fp) for q in pins.get(n, [])]
+        if on:
+            x = sum(q[0] for q in on) / len(on)
+            y = sum(q[1] for q in on) / len(on)
+            dx, dy = x - icx, y - icy                    # push straight out from that side
+            if abs(dx) > abs(dy):
+                return (icx + math.copysign(_K + 1.2, dx), y), 0
+            return (x, icy + math.copysign(_K + 1.2, dy)), 0
+        near = [placed_nets[n] for n in nets(fp) if n in placed_nets]
+        if near:
+            return near[0], 1
+        return None, 2
+
+    def target_any(fp):
+        t, kind = target(fp)
+        return (t, kind) if t else ((icx, icy + _K + 2.0), 2)
+
+    def fits(x0, y0, x1, y1):
+        if not any(rx0 <= x0 and ry0 <= y0 and x1 <= rx1 and y1 <= ry1 for rx0, ry0, rx1, ry1 in regions):
+            return False
+        return all(x1 <= bx0 or x0 >= bx1 or y1 <= by0 or y0 >= by1 for bx0, by0, bx1, by1 in boxes)
+
+    rest = []
+    pending = list(items)
+    for rnd in range(4):                                 # pin parts, then their neighbours
+        nxt = []
+        for fp, size in pending:
+            t, kind = target(fp) if rnd < 3 else target_any(fp)
+            if t is None:
+                nxt.append((fp, size))
+                continue
+            best = None
+            for r in [0.0] + [0.25 * k for k in range(1, 61)]:
+                ring = [(0.0, 0.0)] if r == 0 else \
+                    [(r * math.cos(a * math.pi / 16), r * math.sin(a * math.pi / 16)) for a in range(32)]
+                for ox, oy in ring:
+                    for rot in (0, 90):
+                        fp.SetOrientationDegrees(rot)
+                        w, h, cx, cy = size_of(fp)
+                        X, Y = t[0] + ox, t[1] + oy
+                        bx = (X - (w + gap) / 2, Y - (h + gap) / 2, X + (w + gap) / 2, Y + (h + gap) / 2)
+                        if fits(*bx):
+                            fp.SetPosition(mm(X - cx, Y - cy))
+                            cost = 0.0
+                            for p in fp.Pads():
+                                q = pins.get(p.GetNetname())
+                                if q:
+                                    px, py = pcbnew.ToMM(p.GetPosition().x), pcbnew.ToMM(p.GetPosition().y)
+                                    cost += min(math.hypot(px - a, py - b) for a, b in q)
+                            if best is None or cost < best[0]:
+                                best = (cost, rot, X - cx, Y - cy, bx)
+                if best:
+                    break
+            if best is None:
+                nxt.append((fp, size))
+                continue
+            _, rot, x, y, bx = best
+            fp.SetOrientationDegrees(rot)
+            fp.SetPosition(mm(x, y))
+            boxes.append(bx)
+            for n in nets(fp):
+                placed_nets.setdefault(n, ((bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2))
+        pending = nxt
+    for fp, _ in pending:
+        print(f'warning: no spot near the DRV8353 for {fp.GetReference()}')
+    return pending
+
+
 def place_power(groups):
     def one(role):
         return groups.pop(role)[0][0]
@@ -407,6 +494,9 @@ def main():
         regions = REGIONS[g]
         if g == 'io':                      # skip what ldo used of the shared band
             regions = [rg for rg in regions]
+        if g == 'drv':                     # at their DRV8353 pins, not just packed
+            items = place_at_pins(items, next(f for f in board.GetFootprints() if f.GetValue().startswith('DRV8353')), regions,
+                                  GROUP_GAP.get(g, GAP))
         pack(items, regions, GROUP_GAP.get(g, GAP))
         if g in BOTTOM:
             for fp, (w, h, cx, cy) in items:
