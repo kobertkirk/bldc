@@ -73,7 +73,7 @@ def rect(x0, y0, x1, y1):
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
-def plane_keepout(board):
+def plane_keepout(board, solid_in1=False):
     """In1 is a solid GND plane: no tracks anywhere.  In2 carries +48 V under the
     power array, the battery strip and the + side of the bulk caps (no tracks
     there either); elsewhere In2 is a signal layer for the controller."""
@@ -95,7 +95,9 @@ def plane_keepout(board):
             o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
         board.Add(z)
 
-    area(pcbnew.In1_Cu, rect(0.2, 0.2, W - 0.2, H - 0.2), 'solid GND plane')
+    if solid_in1:      # added only after routing: Freerouting's wire keep-outs also stop vias
+        area(pcbnew.In1_Cu, rect(0.2, 0.2, W - 0.2, H - 0.2), 'solid GND plane')
+        return
     area(pcbnew.In2_Cu, [(0.2, 0.2), (PLUS_X, 0.2), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
                          (POWER_X + 7.8, KEEPOUT_Y), (0.2, KEEPOUT_Y)], '+48V plane under the power array')
 
@@ -246,6 +248,8 @@ def patch_dsn(path, board, clearance_um=210):
     nodes.  The router still joins each switch node to the DRV8353 SHx pin."""
     txt = open(path).read()
     txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
+    # In1 is the solid GND plane: a power layer for the router (vias pass, no wires)
+    txt = re.sub(r'(\(layer In1\.Cu\s*\(type )signal\)', r'\1power)', txt)
     txt = re.sub(r'\n\s*\(net LS_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
     txt = re.sub(r' LS_[ABC](?=[\s)])', '', txt)
     for pn in PLANE_NETS:          # nothing left to route: the fan-out vias reach the planes
@@ -820,6 +824,7 @@ def main():
     print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
     if not args.no_short_repair:
         print(f'auto-repaired {auto_repair(board)} open connection(s)')
+    plane_keepout(board, solid_in1=True)
     print(f'grid-routed {grid_finish(board)} more')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
