@@ -145,8 +145,11 @@ def role_of(c, state):
             return 'batterm'
         if v == 'SMCJ60CA':
             return 'tvs'
-        if pins & {'SW5', 'BST5', 'FB5', 'RIP5', 'RT_SD', 'RCL', 'VCC_B'} or \
-                (v == '1u/100V') or (pins <= {'+5V', 'GND'} and lib != 'Device:LED' and v != '1u'):
+        if pins & {'BST5', 'FB5', 'RIP5', 'RT_SD', 'RCL', 'VCC_B'} and lib != 'Device:L' \
+                and 'EN_RAW' not in pins:
+            return 'drv'                      # tied to DRV8353 buck pins: keep them at the pins
+        if pins & {'SW5'} or (v == '1u/100V') or \
+                (pins <= {'+5V', 'GND'} and lib != 'Device:LED' and v != '1u'):
             return 'buck'
         if any(n in pins for n in ('LATCH_B', 'LATCH_PULL', 'HOLD_B', 'PWR_BTN', 'EN_RAW')):
             return 'latch'
@@ -289,6 +292,9 @@ def place_power(groups):
             for ph in 'ABC':
                 if n in (f'GH_{ph}', f'GL_{ph}', f'SW_{ph}', f'SP_{ph}', f'SN_{ph}'):
                     cost += abs(pcbnew.ToMM(p.GetPosition().x) - (gates[ph] + CH_W / 2))
+                    cost += 3.0 * max(0.0, pcbnew.ToMM(p.GetPosition().y) - DRV_POS[1])   # face up
+            if n in ('SW5', 'BST5', 'FB5', 'RT_SD', 'RCL', 'VCC_B'):
+                cost += 3.0 * max(0.0, DRV_POS[0] + 3.0 - pcbnew.ToMM(p.GetPosition().x))  # face right
         if best is None or cost < best[0]:
             best = (cost, rot)
     drv.SetOrientationDegrees(best[1])

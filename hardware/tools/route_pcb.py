@@ -74,30 +74,30 @@ def rect(x0, y0, x1, y1):
 
 
 def plane_keepout(board):
-    """No tracks on In1/In2 under the FETs, DC-link caps and shunts: the GND and
-    +48V planes there carry the DC-link and switching currents and must stay
-    unbroken.  Vias may pass through.  Signals may still use the inner layers
-    under the controller and in a channel along the bottom of the power stage
-    (below KEEPOUT_Y), where the planes only carry logic return current."""
-    z = pcbnew.ZONE(board)
-    z.SetIsRuleArea(True)
-    z.SetDoNotAllowTracks(True)
-    z.SetDoNotAllowVias(False)
-    z.SetDoNotAllowPads(False)
-    z.SetDoNotAllowCopperPour(False)
-    z.SetDoNotAllowFootprints(False)
-    ls = pcbnew.LSET()
-    ls.AddLayer(pcbnew.In1_Cu)
-    ls.AddLayer(pcbnew.In2_Cu)
-    z.SetLayerSet(ls)
-    z.SetZoneName('power-stage plane keepout')
-    o = z.Outline()
-    o.NewOutline()
-    pts = [(0.2, 0.2), (PLUS_X, 0.2), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
-           (POWER_X + 7.8, KEEPOUT_Y), (0.2, KEEPOUT_Y)]
-    for x, y in pts:
-        o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
-    board.Add(z)
+    """In1 is a solid GND plane: no tracks anywhere.  In2 carries +48 V under the
+    power array, the battery strip and the + side of the bulk caps (no tracks
+    there either); elsewhere In2 is a signal layer for the controller."""
+    def area(layer, pts, name):
+        z = pcbnew.ZONE(board)
+        z.SetIsRuleArea(True)
+        z.SetDoNotAllowTracks(True)
+        z.SetDoNotAllowVias(False)
+        z.SetDoNotAllowPads(False)
+        z.SetDoNotAllowCopperPour(False)
+        z.SetDoNotAllowFootprints(False)
+        ls = pcbnew.LSET()
+        ls.AddLayer(layer)
+        z.SetLayerSet(ls)
+        z.SetZoneName(name)
+        o = z.Outline()
+        o.NewOutline()
+        for x, y in pts:
+            o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
+        board.Add(z)
+
+    area(pcbnew.In1_Cu, rect(0.2, 0.2, W - 0.2, H - 0.2), 'solid GND plane')
+    area(pcbnew.In2_Cu, [(0.2, 0.2), (PLUS_X, 0.2), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
+                         (POWER_X + 7.8, KEEPOUT_Y), (0.2, KEEPOUT_Y)], '+48V plane under the power array')
 
 
 def phase_keepout(board):
@@ -107,8 +107,7 @@ def phase_keepout(board):
     the motor current.  The left end of each column stays open so the DRV8353
     gate and SHx sense traces can reach the FETs."""
     ls = pcbnew.LSET()
-    ls.AddLayer(pcbnew.F_Cu)
-    ls.AddLayer(pcbnew.B_Cu)
+    ls.AddLayer(pcbnew.F_Cu)          # B.Cu stays open for the gate / sense traces
     for ph in 'ABC':
         x = col_x(ph)
         for x0, y0, x1, y1 in ((x + OPEN_X, SW_Y0, x + COLW - 0.4, SW_Y1),
@@ -129,12 +128,12 @@ def phase_keepout(board):
             board.Add(z)
 
 
-PLANE_NETS = ('GND', '+3V3')     # reach the inner planes through fan-out vias
+PLANE_NETS = ('GND',)            # reaches the solid In1 plane through fan-out vias
 
 
 def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0), via_d=0.6, drill=0.3, stub_w=0.3):
     """Give every GND / +3V3 SMD pad outside the power array its own via into
-    the inner plane (In1 GND, In2 +3V3), with a short stub.  The autorouter
+    the solid In1 GND plane, with a short stub.  The autorouter
     then never has to draw these nets, which is most of the congestion on a
     small two-sided board.  Candidate spots go outward from the part first."""
     clear, hole_clear = 0.22, 0.27
@@ -261,13 +260,14 @@ def patch_dsn(path, board, clearance_um=210):
 
 def inner_planes(board):
     """In1: GND everywhere.  In2: +48 V under the power array, the battery strip
-    and the + side of the bulk caps; +3.3 V for the controller elsewhere.  Solid
+    and the + side of the bulk caps; elsewhere it is a signal layer, and a
+    +3.3 V fill takes the space the signals leave.  Solid
     pad connections: the wire pads and FET via arrays must not be throttled."""
     add_zone(board, 'GND', pcbnew.In1_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), solid=True)
     plus = [(0.5, 0.5), (PLUS_X, 0.5), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
             (POWER_X + 7.8, ARRAY_Y), (0.5, ARRAY_Y)]
     add_zone(board, '+48V', pcbnew.In2_Cu, plus, priority=2, clearance=0.5, solid=True)
-    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1, solid=True)
+    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1)   # fills what is left
 
 
 def outer_pours(board, hv_clear=0.5):
@@ -551,7 +551,8 @@ def _shapes(a, b):
 def _pour_joined(net, locs):
     """Connections the outer pours make: the low-side source nets, and a motor
     wire pad on its switch node."""
-    return net.startswith('LS_') or (net.startswith('SW_') and any(' of J' in d for _, _, d in locs))
+    return (net in PLANE_NETS or net.startswith('LS_') or
+            (net.startswith('SW_') and any(' of J' in d for _, _, d in locs)))
 
 
 def _add_items(board, net, items):

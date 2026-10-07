@@ -97,6 +97,9 @@ def build(board, net, fence=True):
     code = board.FindNet(net).GetNetCode()
     rt, rv = TRACK_W / 2 + CLEAR, VIA_D / 2 + CLEAR
     for t in board.GetTracks():
+        if t.GetClass() == 'PCB_VIA':             # drill-to-drill spacing, any net
+            x, y = to_mm(t.GetPosition().x), to_mm(t.GetPosition().y)
+            g.mark_disc(g.via, x, y, VIA_D + 0.26)
         if t.GetNetCode() == code:
             continue
         if t.GetClass() == 'PCB_VIA':
@@ -130,7 +133,7 @@ def build(board, net, fence=True):
                     g.mark_poly(g.track[k], o)
             if z.GetDoNotAllowVias() or 'phase' in z.GetZoneName():
                 g.mark_poly(g.via, o)
-        elif z.GetNetname().startswith(POUR_NETS) and z.GetNetCode() != code:
+        elif fence and z.GetNetname().startswith(POUR_NETS) and z.GetNetCode() != code:
             for k, layer in enumerate(LAYERS):
                 if layer in (pcbnew.F_Cu, pcbnew.B_Cu) and z.IsOnLayer(layer):
                     g.mark_poly(g.track[k], o)
