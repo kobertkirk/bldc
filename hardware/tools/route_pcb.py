@@ -155,9 +155,9 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
                 return False                       # no via in any pad, own net included
         return all(math.hypot(x - vx, y - vy) >= via_d + clear for vx, vy in vias)
 
-    def ok_stub(a, b, layer, code):
+    def ok_stub(a, b, layer, code, w=stub_w, cl=clear):
         n = max(2, int(math.dist(a, b) / 0.1))
-        acc = pcbnew.FromMM(stub_w / 2 + clear)
+        acc = pcbnew.FromMM(w / 2 + cl)
         for k in range(1, n):
             q = mm(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
             for p in pads:
@@ -165,7 +165,33 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
                     return False
         return True
 
+    def add_stub(pad, layer, a, b, w):
+        t = pcbnew.PCB_TRACK(board)
+        t.SetStart(mm(*a))
+        t.SetEnd(mm(*b))
+        t.SetWidth(pcbnew.FromMM(w))
+        t.SetLayer(layer)
+        t.SetNet(pad.GetNet())
+        board.Add(t)
+
+    def try_via(pad, layer, px, py, cands, w, cl):
+        for vx, vy in cands:
+            vx, vy = round(vx, 3), round(vy, 3)
+            if ok_via(vx, vy, pad.GetNetCode()) and ok_stub((px, py), (vx, vy), layer,
+                                                           pad.GetNetCode(), w, cl):
+                add_stub(pad, layer, (px, py), (vx, vy), w)
+                v = pcbnew.PCB_VIA(board)
+                v.SetPosition(mm(vx, vy))
+                v.SetWidth(pcbnew.FromMM(via_d))
+                v.SetDrill(pcbnew.FromMM(drill))
+                v.SetNet(pad.GetNet())
+                board.Add(v)
+                vias.append((vx, vy))
+                return True
+        return False
+
     added = 0
+    todo = []
     for fp in board.GetFootprints():
         c = fp.GetPosition()
         cx, cy = pcbnew.ToMM(c.x), pcbnew.ToMM(c.y)
@@ -180,54 +206,39 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
                 continue
             layer = pcbnew.F_Cu if pad.IsOnLayer(pcbnew.F_Cu) else pcbnew.B_Cu
             ang0 = math.atan2(py - cy, px - cx) if math.hypot(px - cx, py - cy) > 0.2 else 0.0
-            done = False
-            for d in dist:
-                for da in (0, 45, -45, 90, -90, 135, -135, 180):
-                    a = ang0 + math.radians(da)
-                    vx, vy = round(px + d * math.cos(a), 3), round(py + d * math.sin(a), 3)
-                    if ok_via(vx, vy, pad.GetNetCode()) and ok_stub((px, py), (vx, vy), layer,
-                                                                   pad.GetNetCode()):
-                        t = pcbnew.PCB_TRACK(board)
-                        t.SetStart(mm(px, py))
-                        t.SetEnd(mm(vx, vy))
-                        t.SetWidth(pcbnew.FromMM(stub_w))
-                        t.SetLayer(layer)
-                        t.SetNet(pad.GetNet())
-                        board.Add(t)
-                        v = pcbnew.PCB_VIA(board)
-                        v.SetPosition(mm(vx, vy))
-                        v.SetWidth(pcbnew.FromMM(via_d))
-                        v.SetDrill(pcbnew.FromMM(drill))
-                        v.SetNet(pad.GetNet())
-                        board.Add(v)
-                        vias.append((vx, vy))
-                        added += 1
-                        done = True
-                        break
-                if done:
-                    break
-            if not done:
-                # a ground pin next to the part's own exposed pad: tie it straight across
-                ep = [q for q in fp.Pads() if q.GetNetCode() == pad.GetNetCode() and q.GetNumber() != pad.GetNumber()
-                      and q.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and q.IsOnLayer(layer)
-                      and pcbnew.ToMM(q.GetBoundingBox().GetWidth()) > 2.0]
-                for q in ep:
-                    qx, qy = pcbnew.ToMM(q.GetPosition().x), pcbnew.ToMM(q.GetPosition().y)
-                    L = math.hypot(qx - px, qy - py)
-                    ex, ey = px + (qx - px) * min(1.0, 1.6 / L), py + (qy - py) * min(1.0, 1.6 / L)
-                    if q.HitTest(mm(ex, ey)) and ok_stub((px, py), (ex, ey), layer, pad.GetNetCode()):
-                        t = pcbnew.PCB_TRACK(board)
-                        t.SetStart(mm(px, py))
-                        t.SetEnd(mm(ex, ey))
-                        t.SetWidth(pcbnew.FromMM(0.25))
-                        t.SetLayer(layer)
-                        t.SetNet(pad.GetNet())
-                        board.Add(t)
-                        added += 1
-                        done = True
-                        break
-            if not done:
-                print(f'  no fan-out spot for {fp.GetReference()} pad {pad.GetNumber()} ({pad.GetNetname()})')
+            cands = [(px + d * math.cos(ang0 + math.radians(da)), py + d * math.sin(ang0 + math.radians(da)))
+                     for d in dist[:6] for da in (0, 45, -45, 90, -90, 135, -135, 180)]
+            if try_via(pad, layer, px, py, cands, stub_w, clear):
+                added += 1
+            else:
+                todo.append((fp, pad, layer, px, py, ang0))
+
+    # second pass for what is left (fine-pitch pins): a stub no wider than the
+    # pin, along the pin first, out to a longer reach
+    for fp, pad, layer, px, py, ang0 in todo:
+        bb = pad.GetBoundingBox()
+        bw, bh = pcbnew.ToMM(bb.GetWidth()), pcbnew.ToMM(bb.GetHeight())
+        w = round(min(stub_w, 0.8 * bw, 0.8 * bh), 3)
+        axis = 0.0 if bw > bh else math.pi / 2
+        if math.cos(axis - ang0) < 0:
+            axis += math.pi                         # outward along the pin
+        angs = [axis, axis + math.pi] + [ang0 + math.radians(da)
+                                         for da in (0, 45, -45, 90, -90, 135, -135, 180)]
+        cands = [(px + d * math.cos(a), py + d * math.sin(a)) for d in dist for a in angs]
+        if try_via(pad, layer, px, py, cands, w, 0.2):
+            added += 1
+            continue
+        # a ground pin next to the part's own exposed pad: tie it straight across
+        inward = axis + math.pi
+        ex, ey = px + 1.6 * math.cos(inward), py + 1.6 * math.sin(inward)
+        ep = [q for q in fp.Pads() if q.GetNetCode() == pad.GetNetCode() and q.GetNumber() != pad.GetNumber()
+              and q.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and q.IsOnLayer(layer)
+              and pcbnew.ToMM(q.GetBoundingBox().GetWidth()) > 2.0 and q.HitTest(mm(ex, ey))]
+        if ep and ok_stub((px, py), (ex, ey), layer, pad.GetNetCode(), w, 0.2):
+            add_stub(pad, layer, (px, py), (ex, ey), w)
+            added += 1
+            continue
+        print(f'  no fan-out spot for {fp.GetReference()} pad {pad.GetNumber()} ({pad.GetNetname()})')
     return added
 
 
