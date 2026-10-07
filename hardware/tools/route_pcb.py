@@ -129,6 +129,87 @@ def phase_keepout(board):
             board.Add(z)
 
 
+PLANE_NETS = ('GND', '+3V3')     # reach the inner planes through fan-out vias
+
+
+def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0), via_d=0.6, drill=0.3, stub_w=0.3):
+    """Give every GND / +3V3 SMD pad outside the power array its own via into
+    the inner plane (In1 GND, In2 +3V3), with a short stub.  The autorouter
+    then never has to draw these nets, which is most of the congestion on a
+    small two-sided board.  Candidate spots go outward from the part first."""
+    clear, hole_clear = 0.22, 0.27
+    pads = [p for f in board.GetFootprints() for p in f.Pads()]
+    rule_areas = [z for z in board.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
+    vias = []
+
+    def ok_via(x, y, code):
+        q = mm(x, y)
+        r = pcbnew.FromMM(via_d / 2 + clear)
+        if x < 1.3 or y < 1.3 or x > W - 1.3 or y > H - 1.3:
+            return False
+        if any(z.Outline().Contains(q) for z in rule_areas):
+            return False
+        for p in pads:
+            if p.HitTest(q, r + (pcbnew.FromMM(hole_clear - clear) if p.GetDrillSize().x else 0)):
+                return False                       # no via in any pad, own net included
+        return all(math.hypot(x - vx, y - vy) >= via_d + clear for vx, vy in vias)
+
+    def ok_stub(a, b, layer, code):
+        n = max(2, int(math.dist(a, b) / 0.1))
+        acc = pcbnew.FromMM(stub_w / 2 + clear)
+        for k in range(1, n):
+            q = mm(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
+            for p in pads:
+                if p.GetNetCode() != code and p.IsOnLayer(layer) and p.HitTest(q, acc):
+                    return False
+        return True
+
+    added = 0
+    for fp in board.GetFootprints():
+        c = fp.GetPosition()
+        cx, cy = pcbnew.ToMM(c.x), pcbnew.ToMM(c.y)
+        plated = {p.GetNumber() for p in fp.Pads() if p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH}
+        for pad in fp.Pads():
+            if pad.GetNetname() not in PLANE_NETS or pad.GetAttribute() != pcbnew.PAD_ATTRIB_SMD:
+                continue
+            if pad.GetNumber() in plated:           # e.g. the DRV8353 thermal pad
+                continue
+            px, py = pcbnew.ToMM(pad.GetPosition().x), pcbnew.ToMM(pad.GetPosition().y)
+            if px < POWER_X + 8.0 and py < ARRAY_Y:  # the power array has pours + via arrays
+                continue
+            layer = pcbnew.F_Cu if pad.IsOnLayer(pcbnew.F_Cu) else pcbnew.B_Cu
+            ang0 = math.atan2(py - cy, px - cx) if math.hypot(px - cx, py - cy) > 0.2 else 0.0
+            done = False
+            for d in dist:
+                for da in (0, 45, -45, 90, -90, 135, -135, 180):
+                    a = ang0 + math.radians(da)
+                    vx, vy = round(px + d * math.cos(a), 3), round(py + d * math.sin(a), 3)
+                    if ok_via(vx, vy, pad.GetNetCode()) and ok_stub((px, py), (vx, vy), layer,
+                                                                   pad.GetNetCode()):
+                        t = pcbnew.PCB_TRACK(board)
+                        t.SetStart(mm(px, py))
+                        t.SetEnd(mm(vx, vy))
+                        t.SetWidth(pcbnew.FromMM(stub_w))
+                        t.SetLayer(layer)
+                        t.SetNet(pad.GetNet())
+                        board.Add(t)
+                        v = pcbnew.PCB_VIA(board)
+                        v.SetPosition(mm(vx, vy))
+                        v.SetWidth(pcbnew.FromMM(via_d))
+                        v.SetDrill(pcbnew.FromMM(drill))
+                        v.SetNet(pad.GetNet())
+                        board.Add(v)
+                        vias.append((vx, vy))
+                        added += 1
+                        done = True
+                        break
+                if done:
+                    break
+            if not done:
+                print(f'  no fan-out spot for {fp.GetReference()} pad {pad.GetNumber()} ({pad.GetNetname()})')
+    return added
+
+
 def four_layers():
     ls = pcbnew.LSET()
     for layer in (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu):
@@ -168,6 +249,10 @@ def patch_dsn(path, board, clearance_um=210):
     txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
     txt = re.sub(r'\n\s*\(net LS_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
     txt = re.sub(r' LS_[ABC](?=[\s)])', '', txt)
+    for pn in PLANE_NETS:          # nothing left to route: the fan-out vias reach the planes
+        txt = re.sub(r'(\(net %s\n\s*\(pins )(\S+)[^)]*\)' % re.escape(pn), r'\1\2)', txt)
+        # and the router must leave the fan-out stubs and vias where they are
+        txt = txt.replace(f'(net {pn})(type route)', f'(net {pn})(type fix)')
     motor = [fp.GetReference() for fp in board.GetFootprints() if fp.GetValue().startswith('MOTOR_')]
     for ref in motor:
         txt = re.sub(r' %s-[0-9@]+(?=[\s)])' % re.escape(ref), '', txt)
@@ -637,6 +722,8 @@ def import_ses(board, ses_path):
         if net[1] in rip:
             print(f'ripped up the router wiring of {net[1]}')
             continue
+        if net[1] in PLANE_NETS:              # only our own fan-out, already on the board
+            continue
         ni = board.FindNet(net[1])
         ends = {}                                  # point -> set of layers
         for wire in find(net, 'wire'):
@@ -684,6 +771,9 @@ def main():
     ap.add_argument('--legacy', action='store_true',
                     help='Freerouting 1.x command line (needs a display: runs under xvfb-run)')
     ap.add_argument('--ses', help='skip routing and import this SES file')
+    ap.add_argument('--no-short-repair', action='store_true',
+                    help='skip the DRC-checked short repairs (slow on a dense board) and go '
+                         'straight to the grid router')
     ap.add_argument('--no-optimize', action='store_true',
                     help='skip Freerouting route optimisation (1.9 can hang in it)')
     args = ap.parse_args()
@@ -699,6 +789,7 @@ def main():
     plane_keepout(board)
     phase_keepout(board)
     edge_keepout(board)
+    print(f'fan-out: {fanout(board)} plane vias')
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
     patch_dsn(dsn, board)
@@ -726,7 +817,8 @@ def main():
     print(f'imported {nt} track segments, {nv} vias')
     print(f'added {hand_routes(board, ses)} hand route(s)')
     print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
-    print(f'auto-repaired {auto_repair(board)} open connection(s)')
+    if not args.no_short_repair:
+        print(f'auto-repaired {auto_repair(board)} open connection(s)')
     print(f'grid-routed {grid_finish(board)} more')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
