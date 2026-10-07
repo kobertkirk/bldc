@@ -7,3 +7,4 @@ __pycache__/
 *.pyc
 hardware/tools/render3d/node_modules
 hardware/tools/render3d/board.wrl
+hardware/tools/logs/
