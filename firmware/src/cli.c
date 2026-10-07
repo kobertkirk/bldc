@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "drv8353.h"
 #include "hall.h"
 #include "hw.h"
 #include "mathx.h"
@@ -173,6 +174,7 @@ static void help(void)
                ">  save | defaults     write config to flash | restore defaults (RAM)\r\n"
                ">  detect [r|l|hall]   measure motor R, L and learn halls (WHEEL OFF GROUND)\r\n"
                ">  clear               clear latched faults\r\n"
+               ">  drv                 gate driver (DRV8353) fault registers\r\n"
                ">  off | reboot        power off | restart MCU\r\n");
 }
 
@@ -282,6 +284,11 @@ static void command(char *s)
     } else if (!strcmp(c, "clear")) {
         motor_clear_faults();
         cli_printf(">OK\r\n");
+    } else if (!strcmp(c, "drv")) {
+        /* DRV8353 fault words: live, and as captured at the last driver trip */
+        cli_printf(">DRV8353 nFAULT=%s status1=0x%03X status2=0x%03X (last trip 0x%03X 0x%03X)\r\n",
+                   drv_fault_active() ? "LOW" : "high", drv_read(DRV_REG_FAULT1),
+                   drv_read(DRV_REG_FAULT2), drv_status1, drv_status2);
     } else if (!strcmp(c, "off")) {
         cli_printf(">powering off\r\n");
         cli_shutdown_req = 1;

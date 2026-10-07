@@ -63,6 +63,15 @@ int uart_getc(void) { return *uart_in ? (unsigned char)*uart_in++ : -1; }
 unsigned uart_tx_free(void) { return 4096; }
 int config_save(void) { return 0; }
 
+/* DRV8353: configured fine; nFAULT driven by the tests */
+static int sim_drv_fault;
+int drv_init(void) { return 0; }
+uint16_t drv_read(unsigned addr) { (void)addr; return sim_drv_fault ? 0x400u : 0u; }
+void drv_write(unsigned addr, uint16_t data) { (void)addr; (void)data; }
+int drv_fault_active(void) { return sim_drv_fault; }
+void drv_clear_faults(void) {}
+void drv_sleep(void) {}
+
 /* ---------------------------------------------------------------- plant */
 typedef struct {
     double R, L, flux, pp;
@@ -93,11 +102,12 @@ static uint32_t hall_code(double th)
 static void set_inputs(void)
 {
     uint32_t code = P.hall_force >= 0 ? (uint32_t)P.hall_force : hall_code(P.theta);
-    uint32_t idr = (1u << 3);                       /* button not pressed */
+    uint32_t idra = 1u << BTN_PIN;                  /* button not pressed */
     if (!P.dir_rev)
-        idr |= 1u << 4;
-    if (!P.brake)
-        idr |= 1u << 5;
+        idra |= 1u << DIR_PIN;
+    sim_gpioa.IDR = idra;
+    sim_gpioc.IDR = P.brake ? 0u : (1u << BRAKE_PIN);
+    uint32_t idr = sim_drv_fault ? 0u : (1u << DRV_FLT_PIN);
     idr |= ((code & 1) << 10) | (((code >> 1) & 1) << 11) | (((code >> 2) & 1) << 12);
     sim_gpiob.IDR = idr;
 }
@@ -194,6 +204,8 @@ static void plant_period(void)
     }
 }
 
+static long sim_blind_samples;   /* periods where one phase could not be measured */
+
 static uint16_t adc12(double v)
 {
     double c = v / VREF * ADC_FS + gauss() * 1.5;
@@ -206,9 +218,21 @@ static void sample_and_isr(void)
     phase_currents(&ia, &ib, &ic);
     const double vmid = VREF / 2;
     const double g = CSA_GAIN * SHUNT_OHM;
-    adc_now.ia = adc12(vmid + 0.004 + ia * g);       /* small offset errors */
-    adc_now.ib = adc12(vmid - 0.003 + ib * g);
-    adc_now.ic = adc12(vmid + 0.002 + ic * g);
+    /* low-side shunts: a phase whose low FET is off at the sampling instant
+       reads nothing useful; give it a plausible-looking wrong value (zero
+       current) so only the firmware's reconstruction can get it right */
+    double i3[3] = {ia, ib, ic};
+    int blind = 0;
+    for (int j = 0; j < 3; j++)
+        if (pwm_on && duty_act[j] > DUTY_MEAS_MAX) {
+            i3[j] = 0.0;
+            blind = 1;
+        }
+    if (blind)
+        sim_blind_samples++;
+    adc_now.ia = adc12(vmid + 0.004 + i3[0] * g);    /* small offset errors */
+    adc_now.ib = adc12(vmid - 0.003 + i3[1] * g);
+    adc_now.ic = adc12(vmid + 0.002 + i3[2] * g);
     adc_now.vbus = adc12(P.vbus / VBUS_DIV);
     adc_now.thr = adc12(P.thr_v / THR_DIV);
     adc_now.tfet = adc12(VREF / 2);                  /* 25 C */
@@ -415,6 +439,9 @@ static void suite(void)
     printf("  speed after 15 s: %.1f km/h (%.0f rpm), Vbus %.1f V, Ibus %.1f A, mod %.2f\n", kmh(),
            rpm(), P.vbus, P.ibus, m.mod);
     CHECK(m.state == ST_RUN && m.faults == 0, "still running, no faults (0x%lx)", (unsigned long)m.faults);
+    CHECK(sim_blind_samples > PWM_HZ / 10,
+          "high-duty phase rebuilt from the other two in %ld periods (low-side shunt window too short)",
+          sim_blind_samples);
     CHECK(P.max_iph < cfg.i_phase_max * 1.10 + 2, "peak phase current %.1f A (limit %.0f A)", P.max_iph,
           cfg.i_phase_max);
     CHECK(P.max_ibus_avg < cfg.i_batt_max * 1.07, "peak battery current (100 ms avg) %.1f A (limit %.0f A)",
@@ -511,6 +538,19 @@ static void suite(void)
     run(2.0, NULL);
     CHECK(!(m.faults & FLT_OVERCURRENT) && m.state == ST_IDLE,
           "overcurrent clears after throttle release (%s)", motor_state_name(m.state));
+
+    printf("== gate driver fault (DRV8353 nFAULT) while riding ==\n");
+    P.thr_v = 3.0;
+    run(1.0, NULL);
+    sim_drv_fault = 1;                  /* e.g. VDS overcurrent on a shorted FET */
+    run(0.0001, NULL);
+    CHECK((m.faults & FLT_DRIVER) && !pwm_on, "PWM off within 2 periods, DRIVER fault (0x%lx)",
+          (unsigned long)m.faults);
+    sim_drv_fault = 0;
+    P.thr_v = 0.85;
+    run(2.5, NULL);
+    CHECK(!(m.faults & FLT_DRIVER) && m.state == ST_IDLE,
+          "driver re-initialised and fault cleared after throttle release (%s)", motor_state_name(m.state));
 
     printf("== over-voltage ==\n");
     P.vbat = 62;

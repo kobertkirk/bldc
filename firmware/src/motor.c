@@ -16,6 +16,7 @@
 
 #include "board.h"
 #include "config.h"
+#include "drv8353.h"
 #include "hall.h"
 #include "hw.h"
 #include "mathx.h"
@@ -25,12 +26,13 @@ float wh_used, ah_used, wh_regen;
 
 #define DT            CTRL_DT
 #define HZ            ((float)PWM_HZ)
-#define VMAX_FRAC     0.92f       /* keep low-side on-time for bootstrap refresh */
+#define VMAX_FRAC     0.92f       /* max duty ~0.96: low-side shunt window on two phases */
 #define BLOCKING      (FLT_OVERCURRENT | FLT_OVERVOLTAGE | FLT_HALL | FLT_THROTTLE | \
-                       FLT_FET_TEMP | FLT_MOTOR_TEMP | FLT_CSA_OFFSET)
-#define LATCHED       (FLT_OVERCURRENT | FLT_HALL | FLT_DETECT)
+                       FLT_FET_TEMP | FLT_MOTOR_TEMP | FLT_CSA_OFFSET | FLT_DRIVER)
+#define LATCHED       (FLT_OVERCURRENT | FLT_HALL | FLT_DETECT | FLT_DRIVER)
 
 static float off_a = 2048, off_b = 2048, off_c = 2048;
+static float duty_live[3] = {0.5f, 0.5f, 0.5f};   /* duties during the sample being read */
 static float acc_a, acc_b, acc_c;
 static uint32_t calib_n;
 
@@ -44,6 +46,7 @@ static uint32_t stall_ticks, fault_ticks;
 static int armed;
 static int8_t active_dir = 1;
 static volatile uint32_t flt_latched, flt_isr, flt_main;
+uint16_t drv_status1, drv_status2;          /* DRV8353 fault words at the last trip */
 static volatile float derate_temp = 1.0f;
 static volatile uint32_t lim_main;
 static float ibus_f, power_f;
@@ -98,6 +101,18 @@ void motor_init(void)
 }
 
 /* ------------------------------------------------------------------------ */
+/* Duties go through here so the ISR knows which ones were live at the next
+   sample: TIM1 (RCR=1) loads them at the valley, the ADC samples at the peak. */
+static float duty_cmd[3] = {0.5f, 0.5f, 0.5f};
+
+static void pwm_out(float a, float b, float c)
+{
+    duty_cmd[0] = a;
+    duty_cmd[1] = b;
+    duty_cmd[2] = c;
+    pwm_set(a, b, c);
+}
+
 static void apply_voltage(float vd, float vq, float theta, float vbus)
 {
     float s, c;
@@ -111,7 +126,7 @@ static void apply_voltage(float vd, float vq, float theta, float vbus)
     float mn = fminf(pa, fminf(pb, pc));
     float off = 0.5f * (mx + mn);
     float inv = 1.0f / vbus;
-    pwm_set(0.5f + (pa - off) * inv, 0.5f + (pb - off) * inv, 0.5f + (pc - off) * inv);
+    pwm_out(0.5f + (pa - off) * inv, 0.5f + (pb - off) * inv, 0.5f + (pc - off) * inv);
 }
 
 /* PI current loop.  Returns 1 if the voltage vector was limited. */
@@ -159,7 +174,7 @@ static void start_run(float omega)
     iq_cmd = 0.0f;
     vd_out = 0.0f;
     vq_out = omega * cfg.motor_flux;
-    pwm_set(0.5f, 0.5f, 0.5f);
+    pwm_out(0.5f, 0.5f, 0.5f);
     pwm_enable();
     idle_ticks = 0;
     stall_ticks = 0;
@@ -290,7 +305,7 @@ static void det_step(float id, float iq, float vbus)
                 } else {
                     det_r = (v - det_v1) / (i - det_i1);
                     det_pending = 1;
-                    pwm_set(0.5f, 0.5f, 0.5f);
+                    pwm_out(0.5f, 0.5f, 0.5f);
                     m.state = ST_IDLE;        /* main continues the sequence */
                     pwm_disable();
                 }
@@ -412,6 +427,26 @@ void motor_isr(void)
     float ia = ((float)r.ia - off_a) * AMPS_PER_COUNT;
     float ib = ((float)r.ib - off_b) * AMPS_PER_COUNT;
     float ic = ((float)r.ic - off_c) * AMPS_PER_COUNT;
+    /* low-side shunts: a phase whose low FET was on too briefly around the peak
+       has no valid reading; rebuild it from the other two (ia + ib + ic = 0) */
+    if (pwm_is_enabled()) {
+        int ha = duty_live[0] > DUTY_MEAS_MAX, hb = duty_live[1] > DUTY_MEAS_MAX,
+            hc = duty_live[2] > DUTY_MEAS_MAX;
+        if (ha + hb + hc >= 2) {              /* only in deep over-modulation */
+            ia = m.ia;
+            ib = m.ib;
+            ic = m.ic;
+        } else if (ha) {
+            ia = -ib - ic;
+        } else if (hb) {
+            ib = -ia - ic;
+        } else if (hc) {
+            ic = -ia - ib;
+        }
+    }
+    duty_live[0] = duty_cmd[0];
+    duty_live[1] = duty_cmd[1];
+    duty_live[2] = duty_cmd[2];
     m.ia = ia;
     m.ib = ib;
     m.ic = ic;
@@ -420,6 +455,10 @@ void motor_isr(void)
     if (fabsf(ia) > HARD_TRIP_AMPS || fabsf(ib) > HARD_TRIP_AMPS || fabsf(ic) > HARD_TRIP_AMPS) {
         pwm_disable();
         flt_latched |= FLT_OVERCURRENT;
+    }
+    if (drv_fault_active()) {                 /* VDS overcurrent, gate fault, UVLO, OTSD */
+        pwm_disable();
+        flt_latched |= FLT_DRIVER;
     }
     uint32_t fi = flt_isr & FLT_CSA_OFFSET;
     if (vb > cfg.v_ov) {
@@ -625,6 +664,28 @@ void motor_slow(uint32_t now_ms)
     lim_main = lim;
     flt_main = fm;
 
+    /* gate-driver fault: keep the status words for the CLI, and once the
+       motor has been stopped for a second try to clear it over SPI */
+    static uint32_t drv_ms;
+    if (flt_latched & FLT_DRIVER) {
+        if (!drv_ms) {
+            drv_status1 = drv_read(DRV_REG_FAULT1);
+            drv_status2 = drv_read(DRV_REG_FAULT2);
+        }
+        if (++drv_ms > 1000u && m.thr_pct == 0.0f) {
+            /* re-write and read back the whole configuration: covers a
+               driver that reset (UVLO) as well as one that only latched */
+            if (drv_init() == 0 && !drv_fault_active()) {
+                __disable_irq();
+                flt_latched &= ~FLT_DRIVER;
+                __enable_irq();
+            }
+            drv_ms = 1;
+        }
+    } else {
+        drv_ms = 0;
+    }
+
     /* energy counters */
     float p = m.power;
     float e = p * (0.001f / 3600.0f);
@@ -663,7 +724,7 @@ void motor_slow(uint32_t now_ms)
         int_d = int_q = 0.0f;
         det_theta = 0.0f;
         det_start_phase(0);
-        pwm_set(0.5f, 0.5f, 0.5f);
+        pwm_out(0.5f, 0.5f, 0.5f);
         pwm_enable();
         m.state = ST_DET_L;
         break;
@@ -687,7 +748,7 @@ void motor_slow(uint32_t now_ms)
         int_d = int_q = 0.0f;
         det_theta = 0.0f;
         det_start_phase(0);
-        pwm_set(0.5f, 0.5f, 0.5f);
+        pwm_out(0.5f, 0.5f, 0.5f);
         pwm_enable();
         m.state = ST_DET_HALL;
         break;
@@ -733,7 +794,7 @@ int motor_detect(int what)
     det_theta = 0.0f;
     int_d = int_q = 0.0f;
     det_start_phase(0);
-    pwm_set(0.5f, 0.5f, 0.5f);
+    pwm_out(0.5f, 0.5f, 0.5f);
     if (what == 3) {
         hall_learn_reset();
         m.state = ST_DET_HALL;
@@ -754,10 +815,17 @@ const char *motor_detect_msg(void)
     return det_msg_ready ? det_msg : NULL;
 }
 
+void motor_driver_failed(void)
+{
+    __disable_irq();
+    flt_latched |= FLT_DRIVER;
+    __enable_irq();
+}
+
 void motor_clear_faults(void)
 {
     __disable_irq();
-    flt_latched = 0;
+    flt_latched &= FLT_DRIVER;            /* cleared only after the driver re-inits */
     __enable_irq();
 }
 
@@ -779,7 +847,7 @@ void motor_fault_names(uint32_t f, char *buf, unsigned len)
 {
     static const char *n[] = {"OVERCURRENT", "OVERVOLTAGE", "UNDERVOLTAGE", "HALL", "THROTTLE",
                               "FET_TEMP", "MOTOR_TEMP", "NOT_DETECTED", "DETECT", "CSA_OFFSET",
-                              "THROTTLE_AT_POWERUP"};
+                              "THROTTLE_AT_POWERUP", "DRIVER"};
     buf[0] = 0;
     unsigned pos = 0;
     for (unsigned i = 0; i < sizeof(n) / sizeof(n[0]); i++) {

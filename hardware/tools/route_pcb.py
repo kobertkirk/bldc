@@ -10,7 +10,7 @@ Autoroute bldc48.kicad_pcb with Freerouting and add the high-current copper.
   3. a rule area keeps tracks off the inner layers under the power stage, so
      add the planes - In1.Cu = GND, In2.Cu = +48V (power stage) / +3V3
      (logic) - and outer-layer pours for the 35 A paths: +48V bus, each switch node
-     SW_x, each phase output PHASE_x, GND around the low-side FETs, plus a
+     SW_x (with the motor wire pad), each low-side source LS_x, GND around the shunts, plus a
      GND fill on both outer layers everywhere else
   4. fill zones, save, write a DRC report
 
@@ -34,11 +34,14 @@ import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
-from gen_pcb import (COL0, COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO, Y_SHUNT, Y_TERM,  # noqa: E402
+from gen_pcb import (ARRAY_Y, CAP_X, CAP_YS, CH_W, COLW, H, POWER_X, TVS_POS, W, Y_HI, Y_LO,  # noqa: E402
                      col_x)  # board geometry
 
-KEEPOUT_Y = Y_CER + 4.0     # inner-layer track keepout ends below the DC-link ceramics
-COL0_STRIP = COL0 - 0.5     # right edge of the battery-terminal strip
+KEEPOUT_Y = ARRAY_Y          # inner-layer track keepout: the power array and its DC path
+PLUS_X = CAP_X               # +48 V side of the bulk-cap column (pads 1 at CAP_X - 3.75)
+SW_Y0, SW_Y1 = Y_HI + 2.5, Y_LO + 0.7      # switch-node band between the FETs
+LS_Y0, LS_Y1 = Y_LO + 2.5, Y_LO + 7.0      # low-side source leads
+OPEN_X = 5.5                 # left end of each column left open for the DRV sense / gate taps
 
 
 def mm(x, y):
@@ -90,26 +93,26 @@ def plane_keepout(board):
     z.SetZoneName('power-stage plane keepout')
     o = z.Outline()
     o.NewOutline()
-    for x, y in rect(0.2, 0.2, POWER_X + 1.0, KEEPOUT_Y):
+    pts = [(0.2, 0.2), (PLUS_X, 0.2), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
+           (POWER_X + 7.8, KEEPOUT_Y), (0.2, KEEPOUT_Y)]
+    for x, y in pts:
         o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
     board.Add(z)
 
 
 def phase_keepout(board):
-    """No tracks on the outer layers across a phase output strip (shunt -> motor
-    terminal): a signal crossing one splits the pour, and that layer then
-    carries none of the motor current.  The notch leaves the
-    shunt's right-hand sense pad free to exit towards its INA240."""
+    """No tracks on the outer layers across a switch node (high-side source ->
+    low-side drain -> motor wire) or a low-side source band (-> shunt): a
+    signal crossing one splits the pour, and that layer then carries none of
+    the motor current.  The left end of each column stays open so the DRV8353
+    gate and SHx sense traces can reach the FETs."""
     ls = pcbnew.LSET()
     ls.AddLayer(pcbnew.F_Cu)
     ls.AddLayer(pcbnew.B_Cu)
-    sense_top, sense_bot = Y_SHUNT + 2.3, Y_SHUNT + 4.6
     for ph in 'ABC':
         x = col_x(ph)
-        x0, x1, xn = x + SHUNT_X + 2.3, x + COLW - 0.4, x + SHUNT_X + 5.8
-        shapes = [[(x0, Y_HI + 3.5), (x1, Y_HI + 3.5), (x1, Y_TERM), (x0, Y_TERM), (x0, sense_bot),
-                   (xn, sense_bot), (xn, sense_top), (x0, sense_top)]]
-        for pts in shapes:
+        for x0, y0, x1, y1 in ((x + OPEN_X, SW_Y0, x + COLW - 0.4, SW_Y1),
+                               (x + OPEN_X, LS_Y0, x + 12.9, LS_Y1)):
             z = pcbnew.ZONE(board)
             z.SetIsRuleArea(True)
             z.SetDoNotAllowTracks(True)
@@ -121,7 +124,7 @@ def phase_keepout(board):
             z.SetZoneName(f'phase {ph} power copper keepout')
             o = z.Outline()
             o.NewOutline()
-            for px, py in pts:
+            for px, py in rect(x0, y0, x1, y1):
                 o.Append(pcbnew.FromMM(px), pcbnew.FromMM(py))
             board.Add(z)
 
@@ -155,58 +158,67 @@ def edge_keepout(board, margin=1.0):
         board.Add(z)
 
 
-def patch_dsn(path, clearance_um=210):
+def patch_dsn(path, board, clearance_um=210):
     """Give the router a little clearance margin over KiCad's 0.2 mm rule
-    (Specctra coordinates are rounded on the way back)."""
+    (Specctra coordinates are rounded on the way back), and leave out the
+    connections the pours make inside the power keep-outs: the low-side
+    source nets (FET source -> shunt) and the motor wire pads on the switch
+    nodes.  The router still joins each switch node to the DRV8353 SHx pin."""
     txt = open(path).read()
     txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
-    # the phase outputs (shunt pad -> motor terminal) are made by the pours, and
-    # their strips are keep-outs for tracks: leave them out of the router's work
-    txt = re.sub(r'\n\s*\(net PHASE_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
-    txt = re.sub(r' PHASE_[ABC](?=[\s)])', '', txt)
+    txt = re.sub(r'\n\s*\(net LS_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
+    txt = re.sub(r' LS_[ABC](?=[\s)])', '', txt)
+    motor = [fp.GetReference() for fp in board.GetFootprints() if fp.GetValue().startswith('MOTOR_')]
+    for ref in motor:
+        txt = re.sub(r' %s-[0-9@]+(?=[\s)])' % re.escape(ref), '', txt)
     open(path, 'w').write(txt)
 
 
 def inner_planes(board):
-    # solid pad connections: the M5 power terminals and FET via arrays must not
-    # be throttled by thermal spokes
+    """In1: GND everywhere.  In2: +48 V under the power array, the battery strip
+    and the + side of the bulk caps; +3.3 V for the controller elsewhere.  Solid
+    pad connections: the wire pads and FET via arrays must not be throttled."""
     add_zone(board, 'GND', pcbnew.In1_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), solid=True)
-    add_zone(board, '+48V', pcbnew.In2_Cu, rect(0.5, 0.5, POWER_X - 0.5, H - 0.5), solid=True)
-    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(POWER_X + 0.5, 0.5, W - 0.5, H - 0.5), solid=True)
+    plus = [(0.5, 0.5), (PLUS_X, 0.5), (PLUS_X, CAP_YS[-1] + 9.4), (POWER_X + 7.8, CAP_YS[-1] + 9.4),
+            (POWER_X + 7.8, ARRAY_Y), (0.5, ARRAY_Y)]
+    add_zone(board, '+48V', pcbnew.In2_Cu, plus, priority=2, clearance=0.5, solid=True)
+    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1, solid=True)
 
 
 def outer_pours(board, hv_clear=0.5):
     """High-current copper on both outer layers (geometry from gen_pcb.py).
 
     Per phase column at x = X:
-      SW_x     high-side source leads + the whole low-side drain tab, out to
-               the shunt's current pad                  (priority 5)
-      PHASE_x  shunt current pad down to the motor terminal (priority 5)
-      GND      low-side source leads + DC-link ceramics  (priority 4)
-    +48V bus along the top: battery terminal, bulk caps, high-side drain tabs
-    (priority 3); GND fills the rest (priority 1).  48-60 V pours keep 0.5 mm
-    from other nets.
+      SW_x   high-side source leads + low-side drain tab + motor wire pad (5)
+      LS_x   low-side source leads down to the shunt's current pad       (6)
+      GND    shunt's GND pad, DC-link ceramics, rest of the column       (4)
+    +48V bus along the top edge, the battery strip's upper half and the + side
+    of the bulk caps (3); GND on the strip's lower half and the caps' - side (3);
+    GND fills the rest (1).  48-60 V pours keep 0.5 mm from other nets.
     """
     for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
         for ph in 'ABC':
             x = col_x(ph)
-            add_zone(board, f'SW_{ph}', layer,
-                     rect(x + FET_X - 5.3, Y_HI + 3.0, x + SHUNT_X - 2.4, Y_LO + 2.0),
+            add_zone(board, f'SW_{ph}', layer, rect(x + CH_W - 0.3, SW_Y0, x + COLW - 0.4, SW_Y1),
                      priority=5, clearance=hv_clear, solid=True)
-            add_zone(board, f'PHASE_{ph}', layer,
-                     rect(x + SHUNT_X + 2.3, Y_HI + 3.5, x + COLW - 0.4, H - 0.6),
-                     priority=5, clearance=hv_clear, solid=True)
-            add_zone(board, 'GND', layer,
-                     rect(x + FET_X - 5.5, Y_LO + 3.3, x + FET_X + 5.5, Y_CER + 3.5),
-                     priority=4, solid=True)
-        add_zone(board, '+48V', layer, rect(0.6, 0.6, POWER_X - 0.5, Y_HI + 2.3),
+            ls = [(x + CH_W - 0.3, LS_Y0), (x + 12.9, LS_Y0), (x + 12.9, LS_Y1), (x + 5.2, LS_Y1),
+                  (x + 5.2, ARRAY_Y - 2.3), (x + CH_W - 0.3, ARRAY_Y - 2.3)]
+            add_zone(board, f'LS_{ph}', layer, ls, priority=6, clearance=hv_clear, solid=True)
+            gnd = [(x + 13.3, SW_Y1 + 0.6), (x + COLW - 0.4, SW_Y1 + 0.6), (x + COLW - 0.4, ARRAY_Y),
+                   (x + 5.7, ARRAY_Y), (x + 5.7, LS_Y1 + 0.4), (x + 13.3, LS_Y1 + 0.4)]
+            add_zone(board, 'GND', layer, gnd, priority=4, solid=True)
+        add_zone(board, '+48V', layer, rect(0.6, 0.6, POWER_X + 7.6, Y_HI + 1.0),
                  priority=3, clearance=hv_clear, solid=True)
-        add_zone(board, '+48V', layer, rect(0.6, 0.6, COL0_STRIP, TVS_POS[1] - 1.5),
+        add_zone(board, '+48V', layer, rect(POWER_X + 0.4, 0.6, POWER_X + 7.6, TVS_POS[1]),
                  priority=3, clearance=hv_clear, solid=True)
+        add_zone(board, '+48V', layer, rect(POWER_X + 7.9, 0.6, PLUS_X, CAP_YS[-1] + 9.3),
+                 priority=3, clearance=hv_clear, solid=True)
+        add_zone(board, 'GND', layer, rect(POWER_X + 0.4, TVS_POS[1], POWER_X + 7.6, ARRAY_Y),
+                 priority=3, solid=True)
         add_zone(board, 'GND', layer, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1, solid=True)
 
 
-POWER_PAD_NETS = ('GND', '+48V', 'SW_', 'PHASE_')
+POWER_PAD_NETS = ('GND', '+48V', 'SW_', 'LS_')
 
 
 def via_arrays(board, pitch=1.3, inset=0.65, dia=0.6, drill=0.3):
@@ -462,7 +474,7 @@ def auto_repair(board, max_tries=400):
         if len(locs) < 2:
             continue
         net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
-        if net.startswith('PHASE_'):          # joined by the pours added afterwards
+        if net.startswith(('LS_', 'SW_')):   # joined by the pours added afterwards
             continue
         ni = board.FindNet(net)
         ea, eb = _endpoints(board, *locs[0]), _endpoints(board, *locs[1])
@@ -633,7 +645,7 @@ def main():
     edge_keepout(board)
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
-    patch_dsn(dsn)
+    patch_dsn(dsn, board)
     print('DSN written')
 
     if args.ses:

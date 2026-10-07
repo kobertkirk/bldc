@@ -8,15 +8,15 @@ turns the same data into a placed PCB with nets assigned.
 
 Pin keys can be the pin *number* (str) or the pin *name* as it appears in the
 KiCad library symbol.  A net name of None marks the pin as no-connect.
-Nets whose names match a power symbol (GND, +48V, +12V, +5V, +3V3) are drawn
+Nets whose names match a power symbol (GND, +48V, +5V, +3V3) are drawn
 with power symbols; everything else gets a net label.
 """
 
-POWER_NETS = {'GND', '+48V', '+12V', '+5V', '+3V3'}
+POWER_NETS = {'GND', '+48V', '+5V', '+3V3'}
 
 SHEETS = [
-    ('power', 'Power input, soft-latch, supplies'),
-    ('bridge', '3-phase power stage and current sensing'),
+    ('power', 'Power input, soft-latch, 5 V buck, 3.3 V LDO'),
+    ('bridge', 'DRV8353RS gate driver, 3-phase power stage, low-side current sensing'),
     ('mcu', 'STM32G431 controller'),
     ('io', 'Connectors and I/O conditioning'),
 ]
@@ -50,15 +50,14 @@ FP_SMA = 'Diode_SMD:D_SMA'
 FP_SMC = 'Diode_SMD:D_SMC'
 FP_SOT23 = 'Package_TO_SOT_SMD:SOT-23'
 FP_LED = 'LED_SMD:LED_0603_1608Metric'
-# Power terminals: M5 plated bolt-down pads (ring lug on 10-12 AWG), via-stitched
-# to the inner planes.  SMD solder pads tear off under wire strain at 35 A.
-FP_TERMINAL = 'MountingHole:MountingHole_5.3mm_M5_Pad_Via'
+# Power wires: 12 AWG soldered into 2.8 mm plated holes (strain-relieve the leads)
+FP_WIRE = 'bldc48:SolderWire_12AWG_D2.8mm_OD5.4mm'
 FP_SHUNT = 'Resistor_SMD:R_Shunt_Isabellenhuette_BVR4026'
 FP_FB = 'Inductor_SMD:L_0603_1608Metric'
 
 
-def jst_ph(n):
-    return f'Connector_JST:JST_PH_B{n}B-PH-K_1x{n:02d}_P2.00mm_Vertical'
+def jst_gh(n):
+    return f'Connector_JST:JST_GH_BM{n:02d}B-GHS-TBT_1x{n:02d}-1MP_P1.25mm_Vertical'
 
 
 def R(sheet, value, a, b, fp=FP_R0603, **kw):
@@ -84,7 +83,9 @@ def LED(sheet, value, anode, cathode, **kw):
 
 def CONN(sheet, n, nets, fp=None, value=None, **kw):
     lib = f'Connector_Generic:Conn_01x{n:02d}'
-    return part(sheet, 'J', lib, value or f'Conn_01x{n:02d}', fp or jst_ph(n),
+    if fp is None:
+        kw.setdefault('MPN', f'JST BM{n:02d}B-GHS-TBT (1.25 mm, latching)')
+    return part(sheet, 'J', lib, value or f'Conn_01x{n:02d}', fp or jst_gh(n),
                 {str(i + 1): net for i, net in enumerate(nets)}, **kw)
 
 
@@ -93,17 +94,19 @@ def CONN(sheet, n, nets, fp=None, value=None, **kw):
 # ============================================================================
 S = 'power'
 
-# Battery input: M5 bolt terminals at the board edge, 36 mm apart (ring lugs on
-# 10-12 AWG; put an XT90-S anti-spark plug and a 40 A fuse in the battery lead)
-CONN(S, 1, ['+48V'], fp=FP_TERMINAL, value='BAT+', MPN='M5 ring lug terminal')
-CONN(S, 1, ['GND'], fp=FP_TERMINAL, value='BAT-', MPN='M5 ring lug terminal')
+# Battery input: 12 AWG wires soldered straight into plated holes (strain-relieve
+# the leads; put an XT90-S anti-spark plug and a 40 A fuse in the battery lead)
+CONN(S, 1, ['+48V'], fp=FP_WIRE, value='BAT+', MPN='12 AWG wire, soldered')
+CONN(S, 1, ['GND'], fp=FP_WIRE, value='BAT-', MPN='12 AWG wire, soldered')
 part(S, 'D', 'Device:D_TVS', 'SMCJ60CA', FP_SMC, {'1': '+48V', '2': 'GND'})
 
 # --- Soft power latch ---------------------------------------------------------
 # Momentary switch pulls PWR_SW to GND (switch only ever sees <3.3 V) -> current
-# flows out of Q1 base through R(47k) + D -> Q1 (high-voltage PNP) turns on -> BUCK_EN rises -> both bucks
-# start -> MCU boots and drives PWR_HOLD high (Q2 keeps Q1 on).  To switch off
-# the MCU sees a long press on PWR_BTN, waits for release, drops PWR_HOLD.
+# flows out of Q1 base through R(47k) + D -> Q1 (high-voltage PNP) turns on ->
+# EN_RAW feeds the DRV8353 buck's RT/SD pin, which shuts the buck down when it
+# is pulled low -> 5 V and 3.3 V come up -> MCU boots and drives PWR_HOLD high
+# (Q2 keeps Q1 on).  To switch off the MCU sees a long press on PWR_BTN, waits
+# for release, drops PWR_HOLD.
 part(S, 'Q', 'Transistor_BJT:MMBTA92', 'MMBTA92', FP_SOT23,
      {'B': 'LATCH_B', 'E': '+48V', 'C': 'EN_RAW'})
 R(S, '100k', '+48V', 'LATCH_B')
@@ -119,53 +122,27 @@ R(S, '10k', '+3V3', 'PWR_BTN')
 D(S, 'BAT46W', 'PWR_BTN', 'PWR_SW')
 C(S, '10n', 'PWR_BTN', 'GND')
 R(S, '100k', 'EN_RAW', 'GND')
-# EN/UVLO divider: bucks only start above ~20 V
-R(S, '330k', 'EN_RAW', 'BUCK_EN')
-R(S, '27k', 'BUCK_EN', 'GND')
-C(S, '1n', 'BUCK_EN', 'GND')
 
-# --- 12 V gate-drive buck (LM5164, 100 V / 1 A, COT) --------------------------
-# Fsw(kHz) = Vout*2500/Ron(k) -> 12 V, Ron=100k -> 300 kHz
-# Vout = 1.2 V * (1 + 90.9k/10k) = 12.1 V
-C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
-C(S, '100n/100V', '+48V', 'GND', fp=FP_C0805)
-part(S, 'U', 'Regulator_Switching:LM5164DDA', 'LM5164DDA',
-     'Package_SO:HSOP-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.1mm_ThermalVias',
-     {'VIN': '+48V', 'EN/UVLO': 'BUCK_EN', 'RON': 'RON12', 'GND': 'GND',
-      'EP': 'GND', 'BST': 'BST12', 'SW': 'SW12', 'FB': 'FB12', 'PGOOD': None})
-R(S, '100k', 'RON12', 'GND')
-C(S, '2.2n', 'BST12', 'SW12')
-# 12 V load is ~0.1 A (gate drive): peak = load + ripple/2 = ~0.35 A
-part(S, 'L', 'Device:L', '68u', 'Inductor_SMD:L_Bourns_SRN8040TA',
-     {'1': 'SW12', '2': '+12V'}, MPN='Bourns SRN8040TA-680M (LCSC C2047059)')
-R(S, '90.9k', '+12V', 'FB12')
-R(S, '10k', 'FB12', 'GND')
-# Type-3 ripple injection: RA = (Vin-Vout)*ton/(25mV*CA)
-R(S, '365k', 'SW12', 'RIP12')
-C(S, '3.3n', 'RIP12', '+12V')
-C(S, '100n', 'RIP12', 'FB12')
-C(S, '22u/25V', '+12V', 'GND', fp=FP_C1210)
-C(S, '22u/25V', '+12V', 'GND', fp=FP_C1210)
-
-# --- 5 V logic / sensor buck -------------------------------------------------
-# Ron = 5*2500/300 = 41.7k -> 41.2k ; Vout = 1.2*(1+31.6/10) = 4.99 V
-C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
-C(S, '100n/100V', '+48V', 'GND', fp=FP_C0805)
-part(S, 'U', 'Regulator_Switching:LM5164DDA', 'LM5164DDA',
-     'Package_SO:HSOP-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.1mm_ThermalVias',
-     {'VIN': '+48V', 'EN/UVLO': 'BUCK_EN', 'RON': 'RON5', 'GND': 'GND',
-      'EP': 'GND', 'BST': 'BST5', 'SW': 'SW5', 'FB': 'FB5', 'PGOOD': None})
-R(S, '41.2k', 'RON5', 'GND')
-C(S, '2.2n', 'BST5', 'SW5')
-part(S, 'L', 'Device:L', '33u', 'Inductor_SMD:L_Bourns_SRN8040TA',
-     {'1': 'SW5', '2': '+5V'}, MPN='Bourns SRN8040TA-330M, or YJYCOIN YNR8040-330M (LCSC C497847); 33 uH, Isat >= 1 A, 8x8 mm')
-R(S, '31.6k', '+5V', 'FB5')
-R(S, '10k', 'FB5', 'GND')
-R(S, '178k', 'SW5', 'RIP5')
-C(S, '3.3n', 'RIP5', '+5V')
-C(S, '100n', 'RIP5', 'FB5')
+# --- 5 V buck inside the DRV8353RS (LM5008A core, 6-95 V in, 350 mA) ----------
+# COT: t_on = 1.25e-10 * R_T / V_in -> 150k: 390 ns at 48 V -> f = 5/(48*390n) = 270 kHz
+# (R_T hangs off EN_RAW, so the latch also shuts the buck down: RT/SD < 0.7 V)
+# V_out = 2.5 V * (1 + 4.02k/4.02k) = 5.0 V; type-3 ripple injection as in the
+# DRV8353RS-EVM; non-synchronous, so a 100 V Schottky catches the inductor current
+R(S, '150k', 'EN_RAW', 'RT_SD')
+R(S, '100k', 'RCL', 'GND')
+C(S, '1u/100V', '+48V', 'GND', fp=FP_C0805)
+C(S, '10n', 'BST5', 'SW5')
+C(S, '1u', 'VCC_B', 'GND')
+D(S, 'SS110', 'GND', 'SW5', fp=FP_SMA, MPN='100 V 1 A Schottky, SMA (e.g. MDD SS110)')
+part(S, 'L', 'Device:L', '100u', 'Inductor_SMD:L_Bourns_SRN6045TA',
+     {'1': 'SW5', '2': '+5V'}, MPN='Bourns SRN6045TA-101M or eq. (100 uH, Isat >= 0.5 A, 6x6 mm)')
+R(S, '4.02k', '+5V', 'FB5')
+R(S, '4.02k', 'FB5', 'GND')
+R(S, '8.2k', 'SW5', 'RIP5')
+C(S, '47n', 'RIP5', '+5V')
+C(S, '330p', 'RIP5', 'FB5')
 C(S, '22u/10V', '+5V', 'GND', fp=FP_C1210)
-C(S, '22u/10V', '+5V', 'GND', fp=FP_C1210)
+C(S, '4.7u', '+5V', 'GND', fp=FP_C0805)
 
 # --- 3.3 V LDO ---------------------------------------------------------------
 part(S, 'U', 'Regulator_Linear:AP2112K-3.3', 'AP2112K-3.3', 'Package_TO_SOT_SMD:SOT-23-5',
@@ -176,7 +153,7 @@ R(S, '2.2k', '+3V3', 'PWR_LED_A')
 LED(S, 'GREEN', 'PWR_LED_A', 'GND')
 
 # Power flags (tell ERC these nets are driven)
-for net in ['+48V', 'GND', '+12V', '+5V']:
+for net in ['+48V', 'GND', '+5V']:
     part(S, '#FLG', 'power:PWR_FLAG', 'PWR_FLAG', '', {'1': net})
 
 # ============================================================================
@@ -184,10 +161,10 @@ for net in ['+48V', 'GND', '+12V', '+5V']:
 # ============================================================================
 S = 'bridge'
 
-# DC-link capacitance: 4 x 1000 uF/100 V, one large can over each 28.5 mm of the
-# bridge row (~4.3 A rms each at the ~17 A worst case at 35 A battery current),
-# + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
-for i in range(4):
+# DC-link capacitance: 3 x 1000 uF/100 V standing beside the bridge (~17 A rms
+# ripple at 35 A battery current, short peaks to ~27 A) + 6 x 2.2 uF/100 V X7R
+# at the low-side FET sources
+for i in range(3):
     CP(S, '1000u/100V', '+48V', 'GND', fp='Capacitor_THT:CP_Radial_D18.0mm_P7.50mm',
        MPN='Aishi ERS1KM102M35OT (LCSC C724666), 18x35 mm, 7.5 mm pitch, 105 C 10000 h')
 for i in range(6):
@@ -198,44 +175,55 @@ R(S, '100k', '+48V', 'VBUS_SENSE')
 R(S, '5.6k', 'VBUS_SENSE', 'GND')
 C(S, '10n', 'VBUS_SENSE', 'GND')
 
+# --- DRV8353RS: 100 V three-phase smart gate driver -------------------------
+# Gate current is set over SPI (IDRIVE), so no gate resistors; the charge pump
+# and the VGLS regulator run the gates straight off VM (no 12 V rail).  The three
+# current-sense amplifiers read the low-side shunts (gain 20 over SPI).
+part(S, 'U', 'bldc48:DRV8353RS', 'DRV8353RS', 'bldc48:TI-RGZ-48-QFN', {
+    'GND': 'GND', 'AGND': 'GND', 'DGND': 'GND', 'PAD': 'GND',
+    'VM': '+48V', 'VDRAIN': '+48V', 'VIN': '+48V',
+    'VGLS': 'VGLS', 'CPL': 'CPL', 'CPH': 'CPH', 'VCP': 'VCP', 'DVDD': 'DVDD',
+    'GHA': 'GH_A', 'SHA': 'SW_A', 'GLA': 'GL_A', 'SPA': 'SP_A', 'SNA': 'SN_A',
+    'GHB': 'GH_B', 'SHB': 'SW_B', 'GLB': 'GL_B', 'SPB': 'SP_B', 'SNB': 'SN_B',
+    'GHC': 'GH_C', 'SHC': 'SW_C', 'GLC': 'GL_C', 'SPC': 'SP_C', 'SNC': 'SN_C',
+    'SOA': 'SO_A', 'SOB': 'SO_B', 'SOC': 'SO_C', 'VREF': '+3V3',
+    'nFAULT': 'DRV_FAULT', 'SDO': 'DRV_SDO', 'SDI': 'DRV_SDI', 'SCLK': 'DRV_SCK',
+    'nSCS': 'DRV_CS', 'ENABLE': 'DRV_EN',
+    'INHA': 'PWM_AH', 'INLA': 'PWM_AL', 'INHB': 'PWM_BH', 'INLB': 'PWM_BL',
+    'INHC': 'PWM_CH', 'INLC': 'PWM_CL',
+    'SW': 'SW5', 'VCC': 'VCC_B', 'BST': 'BST5', 'RCL': 'RCL', 'RT/SD': 'RT_SD', 'FB': 'FB5',
+}, MPN='TI DRV8353RSRGZR (LCSC C506246)')
+C(S, '100n/100V', '+48V', 'GND', fp=FP_C0805)          # VM
+C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)          # VM
+C(S, '47n/100V', 'CPL', 'CPH', fp=FP_C0805)            # charge-pump flying cap (sees VM)
+C(S, '1u/16V', 'VCP', '+48V')                          # VCP to VDRAIN
+C(S, '1u/16V', 'VGLS', 'GND')
+C(S, '1u', 'DVDD', 'GND')
+C(S, '100n', '+3V3', 'GND')                            # VREF
+R(S, '10k', '+3V3', 'DRV_FAULT')                       # open-drain nFAULT
+R(S, '4.7k', '+3V3', 'DRV_SDO')                        # open-drain SDO
+R(S, '10k', '+3V3', 'DRV_CS')                          # deselected while the MCU boots
+R(S, '100k', 'DRV_EN', 'GND')                          # driver asleep until the MCU wakes it
+
 FP_FET = 'Package_TO_SOT_SMD:Infineon_PG-HSOF-8-1'
 for ph in 'ABC':
-    sw, phn = f'SW_{ph}', f'PHASE_{ph}'
-    # gate driver
-    part(S, 'U', 'Driver_FET:LM5109BMA', 'LM5109BMA', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm',
-         {'VDD': '+12V', 'HI': f'PWM_{ph}H', 'LI': f'PWM_{ph}L', 'VSS': 'GND',
-          'LO': f'LO_{ph}', 'HS': sw, 'HO': f'HO_{ph}', 'HB': f'HB_{ph}'})
-    C(S, '1u/25V', '+12V', 'GND', fp=FP_C0805)
-    R(S, '10k', f'PWM_{ph}H', 'GND')      # keep FETs off while MCU is in reset
-    R(S, '10k', f'PWM_{ph}L', 'GND')
-    D(S, 'ES1D', '+12V', f'HB_{ph}', fp=FP_SMA)
-    C(S, '2.2u/25V', f'HB_{ph}', sw, fp=FP_C0805)
-    # high side FET
-    R(S, '4R7', f'HO_{ph}', f'GH_{ph}')      # ~100 ns edges: ~1.7 W switching loss/phase at 35 A
-    R(S, '10k', f'GH_{ph}', sw)
+    sw = f'SW_{ph}'
     part(S, 'Q', 'Transistor_FET:IPT015N10N5', 'IPT015N10N5', FP_FET,
          {'G': f'GH_{ph}', 'D': '+48V', 'S': sw})
-    # low side FET
-    R(S, '4R7', f'LO_{ph}', f'GL_{ph}')
-    R(S, '10k', f'GL_{ph}', 'GND')
     part(S, 'Q', 'Transistor_FET:IPT015N10N5', 'IPT015N10N5', FP_FET,
-         {'G': f'GL_{ph}', 'D': sw, 'S': 'GND'})
-    # 4-terminal (Kelvin) phase shunt: pins 1/4 carry current, 2/3 are the sense
-    # taps, so copper drop in the pours never reaches the amplifier
+         {'G': f'GL_{ph}', 'D': sw, 'S': f'LS_{ph}'})
+    # low-side 4-terminal (Kelvin) shunt: pins 1/4 carry current (FET source ->
+    # GND), 2/3 are the sense taps to SPx / SNx, so pour drop never reaches the CSA
     part(S, 'R', 'Device:R_Shunt', '0.5m', FP_SHUNT,
-         {'1': sw, '4': phn, '2': f'ISP_{ph}', '3': f'ISN_{ph}'},
+         {'1': f'LS_{ph}', '4': 'GND', '2': f'SP_{ph}', '3': f'SN_{ph}'},
          MPN='Bourns CSS4J-4026R-L500F (LCSC C2076423), 0.5 mOhm 1% 5 W')
-    # INA240A1: gain 20 -> +/-165 A full scale, so the 80 A hard trip is measurable
-    part(S, 'U', 'Amplifier_Current:INA240A1D', 'INA240A1D', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm',
-         {'+': f'ISP_{ph}', '-': f'ISN_{ph}', 'V+': '+3V3', 'GND': 'GND', 'REF1': '+3V3', 'REF2': 'GND',
-          '5': f'ISO_{ph}'})
-    C(S, '100n', '+3V3', 'GND')
-    R(S, '100R', f'ISO_{ph}', f'ISENSE_{ph}')
+    C(S, '1n', f'SP_{ph}', f'SN_{ph}')
+    R(S, '100R', f'SO_{ph}', f'ISENSE_{ph}')
     C(S, '1n', f'ISENSE_{ph}', 'GND')
-    # motor phase output pad
-    CONN(S, 1, [phn], fp=FP_TERMINAL, value=f'MOTOR_{ph}', MPN='M5 ring lug terminal')
+    # motor phase wire: the switch node itself
+    CONN(S, 1, [sw], fp=FP_WIRE, value=f'MOTOR_{ph}', MPN='12 AWG wire, soldered')
 
-# Board-mounted NTC next to low-side FETs
+# Board-mounted NTC next to the low-side FETs
 R(S, '10k', '+3V3', 'TEMP_FET')
 part(S, 'TH', 'Device:Thermistor_NTC', '10k B3435', 'Resistor_SMD:R_0603_1608Metric',
      {'1': 'TEMP_FET', '2': 'GND'}, MPN='Murata NCP18XH103F03RB (LCSC C13564)')
@@ -259,14 +247,16 @@ part(S, 'U', 'MCU_ST_STM32G4:STM32G431CBTx', 'STM32G431CBT6', 'Package_QFP:LQFP-
     'PB10': 'HALL_A', 'PB11': 'HALL_B', 'PB12': 'HALL_C',
     # UART (USART1)
     'PB6': 'UART_TX', 'PB7': 'UART_RX',
+    # DRV8353RS: SPI1 (AF5) + enable / fault
+    'PB3': 'DRV_SCK', 'PB4': 'DRV_SDO', 'PB5': 'DRV_SDI', 'PA15': 'DRV_CS',
+    'PB0': 'DRV_EN', 'PB1': 'DRV_FAULT',
     # switches / power
-    'PB3': 'PWR_BTN', 'PB4': 'DIR_SW', 'PB5': 'BRAKE', 'PB9': 'PWR_HOLD',
+    'PA11': 'PWR_BTN', 'PA12': 'DIR_SW', 'PC14': 'BRAKE', 'PB9': 'PWR_HOLD',
     'PB8': 'BOOT0', 'PC13': 'LED_STATUS', 'PB2': 'LED_FAULT',
     # SWD
     'PA13': 'SWDIO', 'PA14': 'SWCLK',
     # unused
-    'PA7': None, 'PA11': None, 'PA12': None, 'PA15': None, 'PB0': None, 'PB1': None,
-    'PC14': None, 'PC15': None, 'PF0': None, 'PF1': None,
+    'PA7': None, 'PC15': None, 'PF0': None, 'PF1': None,
 })
 for _ in range(4):
     C(S, '100n', '+3V3', 'GND')
@@ -281,8 +271,7 @@ R(S, '1k', 'LED_STATUS', 'LED_STATUS_A')
 LED(S, 'GREEN', 'LED_STATUS_A', 'GND')
 R(S, '1k', 'LED_FAULT', 'LED_FAULT_A')
 LED(S, 'RED', 'LED_FAULT_A', 'GND')
-CONN(S, 5, ['+3V3', 'SWDIO', 'SWCLK', 'NRST', 'GND'],
-     fp='Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical', value='SWD')
+CONN(S, 5, ['+3V3', 'SWDIO', 'SWCLK', 'NRST', 'GND'], value='SWD')
 
 # ============================================================================
 # IO SHEET

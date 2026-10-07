@@ -11,6 +11,7 @@
 
 #include "cli.h"
 #include "config.h"
+#include "drv8353.h"
 #include "hall.h"
 #include "hw.h"
 #include "motor.h"
@@ -55,6 +56,7 @@ static void leds(uint32_t now)
 static void shutdown(void)
 {
     motor_shutdown();
+    drv_sleep();
     cli_printf(">shutting down\r\n");
     while (btn_pressed()) {           /* releasing the hold while pressed does nothing */
         iwdg_kick();
@@ -77,12 +79,17 @@ int main(void)
 {
     hw_early_hold();
     hw_init();
+    int drv_ok = drv_init() == 0;            /* wake + configure the gate driver */
     int loaded = config_load();
     hall_init();
     motor_init();
     cli_init();
     if (!loaded)
         cli_printf(">no saved config, using defaults\r\n");
+    if (!drv_ok) {                           /* default CSA gain would read 4x low */
+        motor_driver_failed();
+        cli_printf(">DRV8353 did not read back its settings (SPI?)\r\n");
+    }
     iwdg_start();
 
     uint32_t last_ms = millis(), btn_t0 = 0, last_isr = 0, idle_since = millis();

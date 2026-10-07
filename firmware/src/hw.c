@@ -1,10 +1,14 @@
 /*
  * STM32G431 peripheral setup (register level, no HAL).
  *
- * TIM1  : 20 kHz center-aligned complementary PWM, 400 ns dead time,
- *         TRGO on update (RCR=1 -> once per PWM period) triggers the ADCs.
- * ADC1  : injected I_A, I_B, I_C, VBUS  -> JEOS interrupt = control loop
- * ADC2  : injected THROTTLE, T_FET, T_MOTOR on the same trigger
+ * TIM1  : 20 kHz center-aligned complementary PWM, 400 ns dead time, into the
+ *         DRV8353RS (6x PWM mode).  OC4 (PWM mode 2, CCR4 just below ARR) drives
+ *         TRGO2, which starts the ADCs just before the counter peak: the
+ *         middle of the low-side conduction window the low-side shunts need.
+ * ADC1  : injected I_A, I_C, VBUS
+ * ADC2  : injected I_B, THROTTLE, T_FET, T_MOTOR on the same trigger
+ *         -> ADC2 JEOS interrupt (the longer sequence) = control loop
+ *         (I_A and I_B are sampled at the same instant)
  * TIM2  : free running 1 MHz timestamp for hall edges
  * USART1: 115200 8N1 telemetry / command port
  */
@@ -81,6 +85,17 @@ static void gpio_init(void)
     gpio_mode(LED_OK_PORT, LED_OK_PIN, 1u, 0);
     gpio_mode(LED_FLT_PORT, LED_FLT_PIN, 1u, 0);
 
+    /* DRV8353: nSCS high, asleep until drv_init(), nFAULT has an external pull-up */
+    DRV_CS_PORT->BSRR = 1u << DRV_CS_PIN;
+    gpio_mode(DRV_CS_PORT, DRV_CS_PIN, 1u, 0);
+    DRV_EN_PORT->BSRR = 1u << (DRV_EN_PIN + 16);
+    gpio_mode(DRV_EN_PORT, DRV_EN_PIN, 1u, 0);
+    gpio_mode(DRV_FLT_PORT, DRV_FLT_PIN, 0u, 0);
+    gpio_mode(GPIOB, 3, 2u, 5);              /* SPI1 SCK  */
+    gpio_mode(GPIOB, 4, 2u, 5);              /* SPI1 MISO */
+    gpio_mode(GPIOB, 5, 2u, 5);              /* SPI1 MOSI */
+    gpio_pull(GPIOB, 4, 1u);
+
     gpio_mode(BTN_PORT, BTN_PIN, 0u, 0);     /* external pull-ups on board */
     gpio_pull(BTN_PORT, BTN_PIN, 0u);
     gpio_mode(DIR_PORT, DIR_PIN, 0u, 0);
@@ -128,13 +143,15 @@ static void tim1_init(void)
     TIM1->RCR = 1;                                      /* 1 update / period */
     TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE |
                   (6u << TIM_CCMR1_OC2M_Pos) | TIM_CCMR1_OC2PE;
-    TIM1->CCMR2 = (6u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
+    /* OC4: PWM mode 2 -> OC4REF rises as the counter passes CCR4 on the way up */
+    TIM1->CCMR2 = (6u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE | (7u << TIM_CCMR2_OC4M_Pos);
     TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = PWM_ARR / 2;
+    TIM1->CCR4 = PWM_ARR - ADC_TRIG_LEAD;
     TIM1->CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE |
                  TIM_CCER_CC3E | TIM_CCER_CC3NE;
     /* MOE=0 + OSSI=1 -> all six gates held low (idle level) */
     TIM1->BDTR = (DEADTIME_TICKS << TIM_BDTR_DTG_Pos) | TIM_BDTR_OSSR | TIM_BDTR_OSSI;
-    TIM1->CR2 = 2u << TIM_CR2_MMS_Pos;                  /* TRGO = update */
+    TIM1->CR2 = 7u << TIM_CR2_MMS2_Pos;                 /* TRGO2 = OC4REF */
     TIM1->EGR = TIM_EGR_UG;
     TIM1->CR1 |= TIM_CR1_CEN;
 
@@ -207,22 +224,22 @@ static void adc_init(void)
     adc_enable(ADC2);
 
     /* sample times: currents/vbus 12.5 cycles, slow channels 47.5 cycles */
-    ADC1->SMPR1 = (2u << (3 * 1)) | (2u << (3 * 2)) | (2u << (3 * 3)) | (2u << (3 * 4));
-    ADC2->SMPR1 = (4u << (3 * 3));
+    ADC1->SMPR1 = (2u << (3 * 1)) | (2u << (3 * 3)) | (2u << (3 * 4));
+    ADC2->SMPR1 = (2u << (3 * 2)) | (4u << (3 * 3));
     ADC2->SMPR2 = (4u << (3 * (13 - 10))) | (4u << (3 * (17 - 10)));
 
     ADC1->CFGR |= ADC_CFGR_JQDIS;
     ADC2->CFGR |= ADC_CFGR_JQDIS;
-    /* JEXTSEL = 0 (TIM1_TRGO), rising edge */
-    ADC1->JSQR = (3u << ADC_JSQR_JL_Pos) | (1u << ADC_JSQR_JEXTEN_Pos) |
-                 (1u << ADC_JSQR_JSQ1_Pos) | (2u << ADC_JSQR_JSQ2_Pos) |
-                 (3u << ADC_JSQR_JSQ3_Pos) | (4u << ADC_JSQR_JSQ4_Pos);
-    ADC2->JSQR = (2u << ADC_JSQR_JL_Pos) | (1u << ADC_JSQR_JEXTEN_Pos) |
-                 (17u << ADC_JSQR_JSQ1_Pos) | (13u << ADC_JSQR_JSQ2_Pos) |
-                 (3u << ADC_JSQR_JSQ3_Pos);
+    /* JEXTSEL = 8 (TIM1_TRGO2, RM0440 table 'ADC1/2 injected triggers'), rising edge */
+    ADC1->JSQR = (2u << ADC_JSQR_JL_Pos) | (8u << ADC_JSQR_JEXTSEL_Pos) | (1u << ADC_JSQR_JEXTEN_Pos) |
+                 (1u << ADC_JSQR_JSQ1_Pos) | (3u << ADC_JSQR_JSQ2_Pos) | (4u << ADC_JSQR_JSQ3_Pos);
+    ADC2->JSQR = (3u << ADC_JSQR_JL_Pos) | (8u << ADC_JSQR_JEXTSEL_Pos) | (1u << ADC_JSQR_JEXTEN_Pos) |
+                 (2u << ADC_JSQR_JSQ1_Pos) | (17u << ADC_JSQR_JSQ2_Pos) |
+                 (13u << ADC_JSQR_JSQ3_Pos) | (3u << ADC_JSQR_JSQ4_Pos);
 
     ADC1->ISR = ADC_ISR_JEOS;
-    ADC1->IER = ADC_IER_JEOSIE;
+    ADC2->ISR = ADC_ISR_JEOS;
+    ADC2->IER = ADC_IER_JEOSIE;
     ADC2->CR |= ADC_CR_JADSTART;
     ADC1->CR |= ADC_CR_JADSTART;
 }
@@ -230,17 +247,19 @@ static void adc_init(void)
 void adc_read(adc_raw_t *r)
 {
     r->ia = (uint16_t)ADC1->JDR1;
-    r->ib = (uint16_t)ADC1->JDR2;
-    r->ic = (uint16_t)ADC1->JDR3;
-    r->vbus = (uint16_t)ADC1->JDR4;
-    r->thr = (uint16_t)ADC2->JDR1;
-    r->tfet = (uint16_t)ADC2->JDR2;
-    r->tmot = (uint16_t)ADC2->JDR3;
+    r->ic = (uint16_t)ADC1->JDR2;
+    r->vbus = (uint16_t)ADC1->JDR3;
+    r->ib = (uint16_t)ADC2->JDR1;
+    r->thr = (uint16_t)ADC2->JDR2;
+    r->tfet = (uint16_t)ADC2->JDR3;
+    r->tmot = (uint16_t)ADC2->JDR4;
 }
 
 void ADC1_2_IRQHandler(void)
 {
-    if (ADC1->ISR & ADC_ISR_JEOS) {
+    /* ADC2 runs the longer sequence, so its end-of-sequence starts the loop */
+    if (ADC2->ISR & ADC_ISR_JEOS) {
+        ADC2->ISR = ADC_ISR_JEOS;
         ADC1->ISR = ADC_ISR_JEOS;
         motor_isr();
     }

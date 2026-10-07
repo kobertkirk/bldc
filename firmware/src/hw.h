@@ -16,8 +16,8 @@ void pwm_set(float da, float db, float dc);   /* duties 0..1             */
 
 /* raw ADC results, valid inside motor_isr() */
 typedef struct {
-    uint16_t ia, ib, ic, vbus;     /* ADC1 injected */
-    uint16_t thr, tfet, tmot;      /* ADC2 injected */
+    uint16_t ia, ic, vbus;         /* ADC1 injected */
+    uint16_t ib, thr, tfet, tmot;  /* ADC2 injected */
 } adc_raw_t;
 void adc_read(adc_raw_t *r);
 

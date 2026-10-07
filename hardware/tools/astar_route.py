@@ -21,7 +21,7 @@ import sys
 import pcbnew
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gen_pcb import H, POWER_X, W, Y_LO  # noqa: E402
+from gen_pcb import ARRAY_Y, CAP_X, CAP_YS, H, POWER_X, W  # noqa: E402
 
 G = 0.25                         # grid pitch, mm
 OY = 0.15                        # grid y offset: puts the 0.5 mm MCU pin rows on grid
@@ -30,7 +30,7 @@ EDGE = 1.0
 LAYERS = [pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu]
 CODES = {pcbnew.F_Cu: 'F', pcbnew.In1_Cu: '1', pcbnew.In2_Cu: '2', pcbnew.B_Cu: 'B'}
 VIA_COST, DIAG = 12.0, math.sqrt(2)
-POUR_NETS = ('+48V', 'SW_')     # outer pours a track must not cut (phase strips: rule areas)
+POUR_NETS = ('+48V', 'SW_', 'LS_')   # outer pours a track must not cut
 
 
 def to_mm(v):
@@ -134,10 +134,10 @@ def build(board, net, fence=True):
             for k, layer in enumerate(LAYERS):
                 if layer in (pcbnew.F_Cu, pcbnew.B_Cu) and z.IsOnLayer(layer):
                     g.mark_poly(g.track[k], o)
-    # outer layers stay off the bridges (bulk caps, FETs, shunts): a track there would
+    # outer layers stay off the power array and battery strip: a track there would
     # slice the +48 V / switch-node copper; inner layers have their own rule area
     for k in ((0, len(LAYERS) - 1) if fence else ()):
-        g.mark_box(g.track[k], 0, 0, POWER_X + 1.0, Y_LO + 4.0, 0)
+        g.mark_box(g.track[k], 0, 0, POWER_X + 7.8, ARRAY_Y, 0)
     for grid in g.track + [g.via]:                    # board-edge margin
         m = EDGE + (VIA_D / 2 if grid is g.via else TRACK_W / 2)
         for j in range(g.ny):
@@ -170,7 +170,12 @@ def route(board, net, a, b, to_plane=False, fence=True):
     gl = [] if to_plane else item_layers(board, net, *b)
     si, sj = g.ij(*a)
     ti, tj = g.ij(*b)
-    plane_i = math.ceil((POWER_X + 1.5) / G)
+    def on_3v3(i, j):                              # In2 is +3V3 outside the +48 V island
+        x, y = g.xy(i, j)
+        m = 1.0
+        in48 = (x < CAP_X + m and y < ARRAY_Y + m) or \
+               (POWER_X + 7.8 - m < x < CAP_X + m and y < CAP_YS[-1] + 9.4 + m)
+        return not in48
     nx = g.nx
     for k in sl:                                   # the end cells sit on our own net's item
         g.track[k][sj * nx + si] = 0
@@ -179,7 +184,7 @@ def route(board, net, a, b, to_plane=False, fence=True):
 
     def h(i, j):
         if to_plane:
-            return max(0, plane_i - i)
+            return 0.0
         return math.hypot(i - ti, j - tj)
 
     start = [(h(si, sj), 0.0, si, sj, k) for k in sl]
@@ -193,7 +198,7 @@ def route(board, net, a, b, to_plane=False, fence=True):
         _, c, i, j, k = heapq.heappop(pq)
         if c > cost.get((i, j, k), 1e18):
             continue
-        if to_plane and i >= plane_i and not g.via[j * nx + i]:
+        if to_plane and on_3v3(i, j) and not g.via[j * nx + i]:
             goal = (i, j, k)
             break
         if not to_plane and (i, j) == (ti, tj) and k in gl:

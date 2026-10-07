@@ -42,6 +42,10 @@ def n(v):
 
 # ----------------------------------------------------------------------------
 # Library handling
+PROJECT_LIB = 'bldc48'
+KICAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad')
+
+
 class Libs:
     def __init__(self, libdir):
         self.libdir = libdir
@@ -49,7 +53,10 @@ class Libs:
 
     def _lib(self, lib):
         if lib not in self.cache:
-            root = parse(open(os.path.join(self.libdir, lib + '.kicad_sym')).read())
+            path = os.path.join(self.libdir, lib + '.kicad_sym')
+            if lib == PROJECT_LIB:                  # symbols not in the stock library
+                path = os.path.join(KICAD_DIR, PROJECT_LIB + '.kicad_sym')
+            root = parse(open(path).read())
             self.cache[lib] = {s[1]: s for s in find(root, 'symbol')}
         return self.cache[lib]
 
@@ -339,7 +346,7 @@ class SheetWriter:
 def title_block(title, page_comment=''):
     return (f'  (title_block\n    (title {q(title)})\n    (date "2026-10-06")\n    (rev "A")\n'
             f'    (company "48V 35A hub motor controller")\n'
-            f'    (comment 1 "STM32G431 + LM5109B x3 + IPT015N10N5 x6 + INA240A1 x3")\n'
+            f'    (comment 1 "STM32G431 + DRV8353RS + IPT015N10N5 x6, low-side Kelvin shunts")\n'
             f'    (comment 2 {q(page_comment)})\n  )\n')
 
 

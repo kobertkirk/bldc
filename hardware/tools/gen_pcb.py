@@ -8,18 +8,21 @@ each footprint is linked to its schematic symbol, so "Update PCB from
 Schematic" works afterwards without losing placement.  Tracks are not routed
 here: route_pcb.py routes this placement and adds planes/pours.
 
-Board plan (mm, origin top-left, power flows left -> right -> down):
+Board plan, rev F (mm, origin top-left, top view), 90 x 64.5 mm:
 
-  x 0..17     battery strip: BAT+ / BAT- M5 bolt terminals on the left edge,
-              26 mm apart, TVS between them, bus-voltage divider below
-  x 17..131   four 18 mm bulk capacitors along the top edge, then one 38 mm column per
-              phase:  [gate driver | high FET over low FET | Kelvin shunt]
-              - both FETs drain-tab up: the switch node is the short gap
-                between the high-side source leads and the low-side tab
-              - DC-link ceramics directly under the low-side source leads
-              - motor terminal straight below the shunt, beside the ceramics;
-                a routing channel for the controller signals runs under it
-  x 132.5..W  controller: bucks, LDO, power latch, MCU, connectors
+  x 0.5..62     power array: one 20.5 mm column per phase
+                  +48 V bus along the top edge (high-side drain tabs)
+                  high FET over low FET, drain tabs up: the switch node is the
+                  short gap between them, and the motor wire pad sits right
+                  beside it; the low-side Kelvin shunt under the low FET; the
+                  DC-link ceramics bottom-right of each column; a 2 mm channel
+                  on the left of each column carries the gate / sense traces
+  x 62.5..69.5  battery wire pads (BAT+ top, BAT- bottom), TVS, two M3 holes
+  x 70..89.5    three 18 x 35 mm bulk capacitors standing in a column
+  y 41.8..57.2  DRV8353RS (top) with its passives, the 5 V buck, the latch;
+                MCU, I/O conditioning and the LDO on the BOTTOM side here and
+                beside the bulk caps (the heat plate only covers the array)
+  y 57.6..64.5  JST-GH connector row along the bottom edge
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
@@ -30,27 +33,34 @@ import pcbnew
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import circuit  # noqa: E402
-from gen_schematic import Libs, resolve_pins, uid  # noqa: E402
+from gen_schematic import KICAD_DIR, PROJECT_LIB, Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 180.0, 69.5           # board size, mm
-GAP = 1.5                    # min spacing between packed courtyards (room for fan-out vias)
+W, H = 90.0, 64.5            # board size, mm (9.0 sq in)
+GAP = 1.0                    # min spacing between packed courtyards
 
-# power-stage geometry (shared with route_pcb.py)
-COL0, COLW = 17.0, 38.0      # first phase column x, column pitch
-POWER_X = COL0 + 3 * COLW    # 131: power stage left of this, controller right
-Y_HI, Y_LO = 28.5, 43.5      # FET centres (switch-node gap between them)
-Y_DRV = (Y_HI + Y_LO) / 2    # gate driver centre
-Y_SHUNT = 36.5
-Y_INA = 49.5
-Y_CER = 56.0                 # DC-link ceramics under the low-side sources
-Y_TERM = 59.0                # motor terminal centres, level with the ceramics
-Y_BULK = 11.0                # centre line of the four 18 mm bulk capacitors
-# x offsets inside a phase column
-DRV_X, FET_X, SHUNT_X, INA_X, TERM_X, CER_DX = 5.5, 16.5, 28.0, 26.0, 32.5, 3.4
-BAT_POS = {'BAT+': (9.5, 12.5), 'BAT-': (9.5, 38.5)}
-TVS_POS = (9.5, 25.5)
+# power-array geometry (shared with route_pcb.py)
+COL0, COLW = 0.5, 20.5       # first phase column x, column pitch
+POWER_X = COL0 + 3 * COLW    # 62: power array left of this
+ARRAY_Y = 41.5               # power array above this (heat-plate area)
+CH_W = 2.2                   # gate / sense channel on the left of each column
+FET_X = CH_W + 5.3           # FET centre x inside a column
+TERM_X = 16.6                # motor wire pad centre x inside a column
+SHUNT_X = FET_X
+Y_HI, Y_LO = 11.4, 25.6      # FET centres (drain tabs up)
+Y_SHUNT = 36.8               # low-side shunt centre
+Y_TERM = 20.0                # motor wire pad centre, beside the switch node
+Y_CER = (31.0, 37.5)         # DC-link ceramics (two per column), bottom-right
+CER_X = 17.0
+BAT_X = 66.0
+BAT_POS = {'BAT+': (BAT_X, 4.2), 'BAT-': (BAT_X, 38.3)}
+TVS_POS = (BAT_X, 21.25)
+HOLES = [(BAT_X, 12.3), (BAT_X, 30.2), (3.6, H - 3.6), (W - 3.6, H - 3.6)]
+CAP_X = 79.75                # bulk capacitor centres (column of three)
+CAP_YS = (9.5, 28.5, 47.5)
+DRV_POS = (31.5, 49.5)
+BOTTOM = ('mcu', 'io', 'ldo')     # groups placed on the bottom side
 
 
 def col_x(ph):
@@ -63,7 +73,8 @@ def mm(x, y):
 
 def load_fp(fpid):
     lib, name = fpid.split(':')
-    fp = pcbnew.FootprintLoad(os.path.join(FPDIR, lib + '.pretty'), name)
+    libdir = os.path.join(KICAD_DIR, lib + '.pretty') if lib == PROJECT_LIB else os.path.join(FPDIR, lib + '.pretty')
+    fp = pcbnew.FootprintLoad(libdir, name)
     if fp is None:
         raise SystemExit(f'footprint {fpid} not found')
     fp.SetFPID(pcbnew.LIB_ID(lib, name))
@@ -101,8 +112,8 @@ def put(fp, x, y, pad=None, direction=None):
     fp.SetPosition(mm(x, y))
 
 
-def role_of(c, ina_caps):
-    """Placement role: an explicit power-stage slot or a packing region."""
+def role_of(c, state):
+    """Placement role: an explicit power-array slot or a packing region."""
     s, ref, v, lib = c['sheet'], c['ref'], c['value'], c['lib_id']
     pins = set(n for n in c['pins'].values() if n)
     if ref.startswith('#'):
@@ -110,44 +121,44 @@ def role_of(c, ina_caps):
     if s == 'bridge':
         if lib == 'Device:Thermistor_NTC':
             return 'ntc'
-        for ph in 'ABC':
-            if any(n.endswith('_' + ph) for n in pins):
-                if lib.startswith('Transistor_FET'):
-                    return f'hifet{ph}' if '+48V' in pins else f'lofet{ph}'
-                if lib == 'Device:R_Shunt':
-                    return f'shunt{ph}'
-                if ref.startswith('J'):
-                    return f'term{ph}'
-                if v.startswith('INA240'):
-                    return f'ina{ph}'
-                if lib.startswith('Driver_FET'):
-                    return f'driver{ph}'
-                if any(n.startswith(('ISO_', 'ISENSE_')) for n in pins):
-                    return f'sense{ph}'
-                return f'drv{ph}'
-        if v == '100n' and pins == {'+3V3', 'GND'}:        # INA240 decouplers, in phase order
-            ina_caps.append(ref)
-            return 'sense' + 'ABC'[len(ina_caps) - 1]
+        if v.startswith('DRV8353'):
+            return 'drv_ic'
         if lib == 'Device:C_Polarized':
             return 'bulk'
         if v == '2.2u/100V':
-            return 'ceramic'
-        return 'bus_sense'
+            state['cer'] = state.get('cer', 0) + 1
+            return 'ceramic' if state['cer'] <= 6 else 'drv'
+        for ph in 'ABC':
+            if lib.startswith('Transistor_FET') and f'GH_{ph}' in pins:
+                return f'hifet{ph}'
+            if lib.startswith('Transistor_FET') and f'GL_{ph}' in pins:
+                return f'lofet{ph}'
+            if lib == 'Device:R_Shunt' and f'SP_{ph}' in pins:
+                return f'shunt{ph}'
+            if ref.startswith('J') and f'SW_{ph}' in pins:
+                return f'term{ph}'
+        if pins & {'VBUS_SENSE', 'ISENSE_A', 'ISENSE_B', 'ISENSE_C'}:
+            return 'mcu'                      # ADC-side filters / divider next to the MCU
+        return 'drv'                          # DRV passives
     if s == 'power':
         if v in ('BAT+', 'BAT-'):
             return 'batterm'
         if v == 'SMCJ60CA':
             return 'tvs'
-        if any(n.endswith('12') for n in pins) or '+12V' in pins:
-            return 'buck12'
-        if any(n.endswith('5') and n != '+5V' for n in pins) or '+5V' in pins and v != 'AP2112K-3.3' \
-                and '+3V3' not in pins:
-            return 'buck5'
-        if any(n in pins for n in ('LATCH_B', 'LATCH_PULL', 'HOLD_B', 'PWR_BTN', 'EN_RAW', 'BUCK_EN')):
+        if pins & {'SW5', 'BST5', 'FB5', 'RIP5', 'RT_SD', 'RCL', 'VCC_B'} or \
+                (v == '1u/100V') or (pins <= {'+5V', 'GND'} and lib != 'Device:LED' and v != '1u'):
+            return 'buck'
+        if any(n in pins for n in ('LATCH_B', 'LATCH_PULL', 'HOLD_B', 'PWR_BTN', 'EN_RAW')):
             return 'latch'
+        if lib == 'Device:LED' or 'PWR_LED_A' in pins:
+            return 'leds'
         return 'ldo'
     if s == 'mcu':
-        return 'conn' if ref.startswith('J') else 'mcu'
+        if ref.startswith('J'):
+            return 'conn'
+        if lib == 'Device:LED' or pins & {'LED_STATUS_A', 'LED_FAULT_A'}:
+            return 'leds'
+        return 'mcu'
     if s == 'io':
         if v == 'M3':
             return 'holes'
@@ -155,25 +166,22 @@ def role_of(c, ina_caps):
     return 'misc'
 
 
-# Packing regions: list of (x0, y0, x1, y1) filled in order
-LX = POWER_X + 1.5            # controller area: two sub-columns
-LM = LX + 24.0
+# Packing regions: list of (x0, y0, x1, y1) filled in order.  The DRV8353 sits
+# at DRV_POS; its passives pack in the ring around it.
+_DX, _DY = DRV_POS
 REGIONS = {
-    'bus_sense': [(0.5, 45, 16.5, 57.5), (8.0, 57.5, 16.5, H - 0.8)],
-    'buck12':    [(LX, 1.5, LM, 18.0)],
-    'buck5':     [(LX, 18.5, LM, 36.5)],
-    'ldo':       [(LX, 37, LM, 46.5)],
-    'latch':     [(LX, 47, LM, H - 8.5)],
-    'mcu':       [(LM + 0.5, 1.5, W - 8, 21.0), (W - 8, 8, W - 0.5, 21.0)],
-    'io':        [(LM + 0.5, 21.5, W - 0.5, 41.0)],
-    'conn':      [(LM + 0.5, 41.5, W - 0.5, H - 8.0), (LM + 0.5, H - 8.0, W - 8, H - 0.5),
-                  (LX, H - 8.0, LM, H - 0.5)],
+    'latch': [(0.5, 41.8, 17.0, 56.6)],
+    'leds':  [(0.5, 41.8, 17.0, 56.6)],
+    'drv':   [(17.0, 41.8, 46.0, _DY - 4.4), (17.0, _DY - 4.4, _DX - 4.4, 56.6),
+              (_DX + 4.4, _DY - 4.4, 46.0, 56.6), (_DX - 4.4, _DY + 4.4, _DX + 4.4, 56.6)],
+    'buck':  [(46.0, 41.8, 69.6, 56.6)],
+    'conn':  [(7.4, 57.0, 82.6, 64.3)],
+    # bottom side (outside the heat-plate area)
+    'mcu':   [(17.0, 41.8, 62.0, 56.6)],
+    'ldo':   [(62.0, 42.0, 69.6, 56.6)],
+    'io':    [(0.5, 41.8, 17.0, 56.6), (70.6, 12.0, 89.5, 26.5), (70.6, 31.2, 89.5, 46.0)],
 }
-GROUP_GAP = {}
-for _ph in 'ABC':
-    _x = col_x(_ph)
-    REGIONS[f'drv{_ph}'] = [(_x + 0.3, Y_HI - 8.0, _x + 10.8, Y_DRV - 2.9), (_x + 0.3, Y_DRV + 2.9, _x + 10.8, H - 1)]
-    REGIONS[f'sense{_ph}'] = [(_x + 21.8, Y_INA + 3.0, _x + 26.8, Y_CER + 6.0)]
+GROUP_GAP = {'conn': 0.6}
 
 
 def _skyline_fit(sky, x0, x1, y1, w, h):
@@ -251,58 +259,76 @@ def place_power(groups):
         put(fp, x, y)
     groups.pop('batterm')
     put(one('tvs'), *TVS_POS, pad='1', direction='up')    # +48V end towards BAT+
+    for fp, y in zip([f for f, _ in groups.pop('bulk')], CAP_YS):
+        put(fp, CAP_X - 3.75, y, pad='2', direction='right')   # pad 1 (+) at the origin
     ceramics = [f for f, _ in groups.pop('ceramic')]
-    bulk = [f for f, _ in groups.pop('bulk')]
-    for k, fp in enumerate(bulk):                    # spread evenly over the three bridges
-        c = COL0 + 3 * COLW * (k + 0.5) / len(bulk)
-        put(fp, c - 3.75, Y_BULK, pad='2', direction='right')   # pad 1 at the origin, 7.5 mm pitch
+    gates = {}
     for ph in 'ABC':
         x = col_x(ph)
-        xf = x + FET_X
-        put(one(f'hifet{ph}'), xf, Y_HI, pad='3', direction='up')     # drain tab to +48V bus
-        put(one(f'lofet{ph}'), xf, Y_LO, pad='3', direction='up')     # drain tab to switch node
-        put(one(f'driver{ph}'), x + DRV_X, Y_DRV, pad='7', direction='right')
+        put(one(f'hifet{ph}'), x + FET_X, Y_HI, pad='3', direction='up')   # drain tab to +48V bus
+        lo = one(f'lofet{ph}')
+        put(lo, x + FET_X, Y_LO, pad='3', direction='up')                  # drain tab to switch node
         put(one(f'shunt{ph}'), x + SHUNT_X, Y_SHUNT, pad='1', direction='left')
-        put(one(f'ina{ph}'), x + INA_X, Y_INA, pad='1', direction='left')
         put(one(f'term{ph}'), x + TERM_X, Y_TERM)
-        for k, dx in enumerate((-CER_DX, CER_DX)):                    # GND pad up, at the sources
-            put(ceramics[2 * 'ABC'.index(ph) + k], xf + dx, Y_CER, pad='2', direction='up')
-    put(one('ntc'), col_x('B') + FET_X, Y_CER + 5.0)                  # next to the middle low-side FET
+        for k, y in enumerate(Y_CER):                 # GND pad down, +48V pad up (via to In2)
+            put(ceramics[2 * 'ABC'.index(ph) + k], x + CER_X, y, pad='2', direction='down')
+        gates[ph] = x
+    th = one('ntc')                                   # beside the middle low FET's drain
+    th.SetOrientationDegrees(90)
+    th.SetPosition(mm(col_x('B') + 14.1, Y_CER[0] + 3.0))
 
+    # DRV8353: the rotation that puts each phase's gate/sense pins nearest its column
+    drv = one('drv_ic')
+    best = None
+    for rot in (0, 90, 180, 270):
+        drv.SetOrientationDegrees(rot)
+        drv.SetPosition(mm(*DRV_POS))
+        cost = 0.0
+        for p in drv.Pads():
+            n = p.GetNetname()
+            for ph in 'ABC':
+                if n in (f'GH_{ph}', f'GL_{ph}', f'SW_{ph}', f'SP_{ph}', f'SN_{ph}'):
+                    cost += abs(pcbnew.ToMM(p.GetPosition().x) - (gates[ph] + CH_W / 2))
+        if best is None or cost < best[0]:
+            best = (cost, rot)
+    drv.SetOrientationDegrees(best[1])
+    drv.SetPosition(mm(*DRV_POS))
 
 
 def unclash_refs(board):
-    """Move a reference off a neighbour's silkscreen or reference (copper is
-    untouched, so routing stays valid); hide it if no nearby spot is free."""
-    # (SWIG hands out a new proxy per call, so footprints are compared by reference)
-    silk = [(f.GetReference(), g.GetBoundingBox()) for f in board.GetFootprints()
-            for g in f.GraphicalItems() if g.GetLayer() == pcbnew.F_SilkS and g.GetClass() != 'PCB_TEXT']
-
-    pads = [p.GetBoundingBox() for f in board.GetFootprints() for p in f.Pads() if p.IsOnLayer(pcbnew.F_Cu)]
+    """Move a reference off a neighbour's silkscreen, a pad or another reference
+    on the same side (copper is untouched, so routing stays valid); hide it if
+    no nearby spot is free."""
     edge = pcbnew.BOX2I(mm(0.5, 0.5), mm(W - 1.0, H - 1.0))
+    for silk_layer, cu in ((pcbnew.F_SilkS, pcbnew.F_Cu), (pcbnew.B_SilkS, pcbnew.B_Cu)):
+        # (SWIG hands out a new proxy per call, so footprints are compared by reference)
+        silk = [g.GetBoundingBox() for f in board.GetFootprints() for g in f.GraphicalItems()
+                if g.GetLayer() == silk_layer and g.GetClass() != 'PCB_TEXT']
+        pads = [p.GetBoundingBox() for f in board.GetFootprints() for p in f.Pads() if p.IsOnLayer(cu)]
+        mine = [f for f in board.GetFootprints() if f.Reference().GetLayer() == silk_layer]
 
-    def clashes(fp):
-        me, bb = fp.GetReference(), fp.Reference().GetBoundingBox()
-        return (not edge.Contains(bb) or any(bb.Intersects(b) for b in pads) or
-                any(bb.Intersects(b) for _, b in silk) or
-                any(f.GetReference() != me and f.Reference().IsVisible() and
-                    bb.Intersects(f.Reference().GetBoundingBox()) for f in board.GetFootprints()))
+        def clashes(fp):
+            me, bb = fp.GetReference(), fp.Reference().GetBoundingBox()
+            return (not edge.Contains(bb) or any(bb.Intersects(b) for b in pads) or
+                    any(bb.Intersects(b) for b in silk) or
+                    any(f.GetReference() != me and f.Reference().IsVisible() and
+                        bb.Intersects(f.Reference().GetBoundingBox()) for f in mine))
 
-    for fp in board.GetFootprints():
-        ref = fp.Reference()
-        if not ref.IsVisible() or not clashes(fp):
-            continue
-        p, r = fp.GetPosition(), ref.GetPosition()
-        ys = (r.y, 2 * p.y - r.y)
-        dxs = [pcbnew.FromMM(d) for d in (0, -1, 1, -2, 2, -3, 3)]
-        for cand in [pcbnew.VECTOR2I(r.x + dx, y) for dx in dxs for y in ys][1:]:
-            ref.SetPosition(cand)
-            if not clashes(fp):
-                break
-        else:
-            ref.SetPosition(r)
-            ref.SetVisible(False)
-            print(f'note: hid crowded reference {fp.GetReference()}')
+        for fp in mine:
+            ref = fp.Reference()
+            if not ref.IsVisible() or not clashes(fp):
+                continue
+            p, r = fp.GetPosition(), ref.GetPosition()
+            ys = (r.y, 2 * p.y - r.y)
+            dxs = [pcbnew.FromMM(d) for d in (0, -1, 1, -2, 2, -3, 3)]
+            for cand in [pcbnew.VECTOR2I(r.x + dx, y) for dx in dxs for y in ys][1:]:
+                ref.SetPosition(cand)
+                if not clashes(fp):
+                    break
+            else:
+                ref.SetPosition(r)
+                ref.SetVisible(False)
+                print(f'note: hid crowded reference {fp.GetReference()}')
 
 
 def main():
@@ -325,14 +351,12 @@ def main():
         return nets[name]
 
     groups = {}
-    ina_caps = []
+    state = {}
     for c in circuit.components:
-        g = role_of(c, ina_caps)
+        g = role_of(c, state)
         if g is None or not c['footprint']:
             continue
         fp = load_fp(c['footprint'])
-        if 'PinHeader' in c['footprint']:
-            fp.SetOrientationDegrees(90)          # lay the SWD header flat
         fp.SetReference(c['ref'])
         fp.SetValue(c['value'])
         sheet_uuid = uid('sheet', c['sheet'])
@@ -358,14 +382,25 @@ def main():
 
     place_power(groups)
     holes = groups.pop('holes')
-    for (fp, _), pos in zip(holes, [(4, 4), (W - 4, 4), (4, H - 4), (W - 4, H - 4)]):
+    for (fp, _), pos in zip(holes, HOLES):
         fp.SetPosition(mm(*pos))
-    for g, items in groups.items():
-        if g.startswith(('drv', 'sense')):
-            items.sort(key=lambda it: -(it[1][0] * it[1][1]))     # biggest first
-        else:
-            items.sort(key=lambda it: (-round(it[1][1], 1), -it[1][0]))   # tallest first: tighter rows
-        pack(items, REGIONS[g], GROUP_GAP.get(g, GAP))
+    # latch and LEDs share a region: pack them as one group
+    groups['latch'] = groups.get('latch', []) + groups.pop('leds', [])
+    # 'io' and 'ldo' share a bottom region: ldo first, io fills the rest
+    for g in ['latch', 'drv', 'buck', 'conn', 'mcu', 'ldo', 'io']:
+        items = groups.pop(g, [])
+        items.sort(key=lambda it: (-round(it[1][1], 1), -it[1][0]))   # tallest first: tighter rows
+        regions = REGIONS[g]
+        if g == 'io':                      # skip what ldo used of the shared band
+            regions = [rg for rg in regions]
+        pack(items, regions, GROUP_GAP.get(g, GAP))
+        if g in BOTTOM:
+            for fp, (w, h, cx, cy) in items:
+                p = fp.GetPosition()
+                fp.Flip(p, True)                       # mirror left/right onto B.Cu
+                fp.SetPosition(pcbnew.VECTOR2I(p.x + pcbnew.FromMM(2 * cx), p.y))
+    if groups:
+        raise SystemExit(f'unplaced groups: {sorted(groups)}')
 
     # terminals carry big silkscreen labels instead; hole refs would sit off the edge
     for fp in board.GetFootprints():
@@ -385,10 +420,10 @@ def main():
     board.Add(rect)
 
     # silkscreen: polarity and phase labels next to the terminals
-    labels = [('48V 35A BLDC  rev E', COL0 + 14, H - 1.5, 1.0),
-              ('BAT+', BAT_POS['BAT+'][0] + 2.5, BAT_POS['BAT+'][1] - 7.4, 1.5),   # above: TVS below
-              ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 6.9, 1.5)]
-    labels += [(f'MOTOR {ph}', col_x(ph) + TERM_X, Y_TERM + 7.3, 1.2) for ph in 'ABC']
+    labels = [('BLDC48 rev F', 45.0, H - 0.9, 0.8),
+              ('+', BAT_POS['BAT+'][0] - 4.6, BAT_POS['BAT+'][1], 2.0),
+              ('-', BAT_POS['BAT-'][0] - 4.6, BAT_POS['BAT-'][1], 2.0)]
+    labels += [(ph, col_x(ph) + TERM_X, Y_TERM - 4.4, 1.6) for ph in 'ABC']
     for txt, x, y, size in labels:
         t = pcbnew.PCB_TEXT(board)
         t.SetText(txt)

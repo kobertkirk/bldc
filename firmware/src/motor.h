@@ -26,6 +26,7 @@ typedef enum {
 #define FLT_DETECT        (1u << 8)
 #define FLT_CSA_OFFSET    (1u << 9)
 #define FLT_THR_NOT_ZERO  (1u << 10)  /* throttle held at power-up          */
+#define FLT_DRIVER        (1u << 11)  /* DRV8353 nFAULT (VDS OCP, gate, UVLO, OTSD) */
 
 /* limiter flags (why torque is reduced) */
 #define LIM_BATT          (1u << 0)
@@ -58,6 +59,7 @@ typedef struct {
 
 extern motor_t m;
 extern float wh_used, ah_used, wh_regen;
+extern uint16_t drv_status1, drv_status2;    /* DRV8353 fault registers at the last trip */
 
 void motor_init(void);               /* blocks ~100 ms for offset calibration */
 void motor_isr(void);
@@ -66,6 +68,7 @@ void motor_slow(uint32_t now_ms);    /* 1 kHz from main loop */
 int motor_detect(int what);          /* 0=all, 1=R, 2=L, 3=hall; -1 if busy */
 const char *motor_detect_msg(void);  /* result text, NULL while running */
 void motor_clear_faults(void);
+void motor_driver_failed(void);      /* gate driver not configured: refuse to run */
 void motor_shutdown(void);
 void motor_update_gains(void);
 const char *motor_state_name(motor_state_t s);
