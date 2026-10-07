@@ -39,8 +39,8 @@
 #define VREF             3.3f
 #define ADC_FS           4096.0f
 #define SHUNT_OHM        0.0005f
-#define CSA_GAIN         50.0f                                /* INA240A2 */
-#define AMPS_PER_COUNT   (VREF / ADC_FS / (CSA_GAIN * SHUNT_OHM))   /* 0.0322 A */
+#define CSA_GAIN         20.0f                                /* INA240A1 */
+#define AMPS_PER_COUNT   (VREF / ADC_FS / (CSA_GAIN * SHUNT_OHM))   /* 0.0806 A */
 #define VBUS_DIV         ((100.0f + 5.6f) / 5.6f)
 #define VOLTS_PER_COUNT  (VREF / ADC_FS * VBUS_DIV)            /* 0.0152 V */
 #define THR_DIV          ((12.0f + 22.0f) / 22.0f)
@@ -49,6 +49,11 @@
 #define NTC_R25          10000.0f
 
 #define HARD_TRIP_AMPS   80.0f       /* instantaneous phase current trip */
-#define ADC_FULLSCALE_A  (2048.0f * AMPS_PER_COUNT)
+#define ADC_FULLSCALE_A  (2048.0f * AMPS_PER_COUNT)         /* +/-165 A */
+
+/* The hard trip must sit well inside what the current sense can report,
+   otherwise a saturated ADC reading never reaches it. */
+_Static_assert(HARD_TRIP_AMPS < 0.9f * (2048.0f * 3.3f / 4096.0f / (CSA_GAIN * SHUNT_OHM)),
+               "overcurrent trip above current-sense full scale");
 
 #endif

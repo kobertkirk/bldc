@@ -11,22 +11,19 @@ import circuit  # noqa: E402
 HINTS = {
     ('C', '2.2u/100V'): 'X7R 1210 100V (e.g. GRM32ER72A225KA35)',
     ('C', '100n/100V'): 'X7R 0805 100V',
-    ('C', '220u/100V'): 'Low-ESR electrolytic 12.5mm, >=1.5A ripple (Panasonic EEU-FS2A221)',
+    ('C', '220u/100V'): 'Low-ESR electrolytic 12.5mm, >=2.1A ripple each (Panasonic EEU-FS2A221)',
     ('C', '22u/25V'): 'X5R/X7R 1210 25V',
     ('C', '22u/10V'): 'X5R/X7R 1210 10V',
     ('C', '2.2u/25V'): 'X7R 0805 25V',
     ('C', '1u/25V'): 'X7R 0805 25V',
     ('C', '2.2n'): 'X7R 0603 50V (LM5164 BST)',
-    ('R', '0.5m'): 'Bourns CRA2512-FZ-R500ELF 3W current sense',
-    ('R', '10R'): '0603 1% (gate resistor)',
+    ('R', '4R7'): '0603 1% (gate resistor)',
     ('D', 'SMCJ60CA'): 'TVS 60V standoff, 1500W, SMC',
     ('D', 'ES1D'): '200V 1A ultrafast, SMA (bootstrap)',
     ('D', '1N4148W'): '100V signal diode SOD-123',
     ('D', 'BAT46W'): '100V Schottky SOD-123',
     ('L', '68u'): 'Bourns SRR1260-680M',
     ('L', '33u'): 'Bourns SRR1260-330M',
-    ('J', 'BAT+'): 'Solder pad for 10-12 AWG (use XT90-S anti-spark plug on the lead)',
-    ('J', 'BAT-'): 'Solder pad for 10-12 AWG',
 }
 
 

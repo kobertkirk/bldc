@@ -2,11 +2,23 @@
 """
 Create bldc48.kicad_pcb from circuit.py using KiCad's pcbnew Python API.
 
-Footprints are placed by function (power stage on the left two thirds, logic
-and connectors on the right), nets are assigned to every pad and each
-footprint is linked to its schematic symbol, so "Update PCB from Schematic"
-works afterwards without losing placement.  Tracks are not routed here:
-route_pcb.py routes this placement and adds planes/pours.
+The power stage is placed by hand (coordinates below); small parts are packed
+into regions next to the part they serve.  Nets are assigned to every pad and
+each footprint is linked to its schematic symbol, so "Update PCB from
+Schematic" works afterwards without losing placement.  Tracks are not routed
+here: route_pcb.py routes this placement and adds planes/pours.
+
+Board plan (mm, origin top-left, power flows left -> right -> down):
+
+  x 0..22     battery strip: BAT+ / BAT- M5 bolt terminals on the left edge,
+              36 mm apart, TVS between them, bus-voltage divider below
+  x 22..160   bulk capacitors along the top edge, then one 46 mm column per
+              phase:  [gate driver | high FET over low FET | Kelvin shunt]
+              - both FETs drain-tab up: the switch node is the short gap
+                between the high-side source leads and the low-side tab
+              - DC-link ceramics directly under the low-side source leads
+              - motor terminal on the bottom edge straight below the shunt
+  x 162..240  controller: bucks, LDO, power latch, MCU, connectors
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
@@ -21,8 +33,21 @@ from gen_schematic import Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 190.0, 120.0          # board size, mm
-GAP = 2.0                    # min spacing between courtyards (room for fan-out vias)
+W, H = 240.0, 100.0          # board size, mm
+GAP = 2.0                    # min spacing between packed courtyards (room for fan-out vias)
+
+# power-stage geometry (shared with route_pcb.py)
+COL0, COLW = 22.0, 46.0      # first phase column x, column pitch
+POWER_X = COL0 + 3 * COLW    # 160: power stage left of this, controller right
+Y_HI, Y_LO = 30.0, 45.0      # FET centres
+Y_SHUNT = 38.0
+Y_TERM = H - 9.0             # motor terminal centres (bottom edge)
+BAT_POS = {'BAT+': (10.0, 14.0), 'BAT-': (10.0, 50.0)}
+TVS_POS = (10.0, 32.0)
+
+
+def col_x(ph):
+    return COL0 + COLW * 'ABC'.index(ph)
 
 
 def mm(x, y):
@@ -49,43 +74,63 @@ def size_of(fp):
             pcbnew.ToMM(c.x), pcbnew.ToMM(c.y))
 
 
-_ina_caps = []
+def orient(fp, pad, direction):
+    """Rotate so `pad` points in `direction` ('up','down','left','right') from the origin."""
+    vec = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[direction]
+    fp.SetPosition(mm(0, 0))
+    best = None
+    for rot in (0, 90, 180, 270):
+        fp.SetOrientationDegrees(rot)
+        p = next(q for q in fp.Pads() if q.GetNumber() == pad).GetPosition()
+        score = vec[0] * p.x + vec[1] * p.y
+        if best is None or score > best[0]:
+            best = (score, rot)
+    fp.SetOrientationDegrees(best[1])
 
 
-def group_of(c):
-    """Assign each part to a placement region."""
-    s, ref, v = c['sheet'], c['ref'], c['value']
+def put(fp, x, y, pad=None, direction=None):
+    if pad:
+        orient(fp, pad, direction)
+    fp.SetPosition(mm(x, y))
+
+
+def role_of(c, ina_caps):
+    """Placement role: an explicit power-stage slot or a packing region."""
+    s, ref, v, lib = c['sheet'], c['ref'], c['value'], c['lib_id']
     pins = set(n for n in c['pins'].values() if n)
     if ref.startswith('#'):
         return None
     if s == 'bridge':
+        if lib == 'Device:Thermistor_NTC':
+            return 'ntc'
         for ph in 'ABC':
             if any(n.endswith('_' + ph) for n in pins):
-                if c['lib_id'].startswith('Transistor_FET'):
+                if lib.startswith('Transistor_FET'):
                     return f'hifet{ph}' if '+48V' in pins else f'lofet{ph}'
-                if v == '0.5m':
+                if lib == 'Device:R_Shunt':
                     return f'shunt{ph}'
                 if ref.startswith('J'):
-                    return f'pad{ph}'
-                if 'INA240' in v or any(n.startswith(('ISO_', 'ISENSE_')) for n in pins):
+                    return f'term{ph}'
+                if v.startswith('INA240'):
+                    return f'ina{ph}'
+                if lib.startswith('Driver_FET'):
+                    return f'driver{ph}'
+                if any(n.startswith(('ISO_', 'ISENSE_')) for n in pins):
                     return f'sense{ph}'
                 return f'drv{ph}'
-        if v == '100n':                       # INA240 decouplers (only +3V3/GND pins)
-            return 'senseA' if not _ina_caps.append(1) and len(_ina_caps) == 1 else \
-                'senseB' if len(_ina_caps) == 2 else 'senseC'
-        if 'u/100V' in v and c['lib_id'] == 'Device:C_Polarized':
+        if v == '100n' and pins == {'+3V3', 'GND'}:        # INA240 decouplers, in phase order
+            ina_caps.append(ref)
+            return 'sense' + 'ABC'[len(ina_caps) - 1]
+        if lib == 'Device:C_Polarized':
             return 'bulk'
         if v == '2.2u/100V':
             return 'ceramic'
-        return 'sense' 
-        if 'u/100V' in v and c['lib_id'] == 'Device:C_Polarized':
-            return 'bulk'
-        if v == '2.2u/100V':
-            return 'ceramic'
-        return 'sense'
+        return 'bus_sense'
     if s == 'power':
-        if v in ('BAT+', 'BAT-', 'SMCJ60CA'):
-            return 'battery'
+        if v in ('BAT+', 'BAT-'):
+            return 'batterm'
+        if v == 'SMCJ60CA':
+            return 'tvs'
         if any(n.endswith('12') for n in pins) or '+12V' in pins:
             return 'buck12'
         if any(n.endswith('5') and n != '+5V' for n in pins) or '+5V' in pins and v != 'AP2112K-3.3' \
@@ -99,52 +144,73 @@ def group_of(c):
     if s == 'io':
         if v == 'M3':
             return 'holes'
-        if ref.startswith('J'):
-            return 'conn'
-        return 'io'
+        return 'conn' if ref.startswith('J') else 'io'
     return 'misc'
 
 
-# Placement regions: (x0, y0, x1, y1) in mm
+# Packing regions: list of (x0, y0, x1, y1) filled in order
 REGIONS = {
-    'bulk':    (10, 2, 112, 18),
-    'ceramic': (26, 18, 112, 26),
-    'battery': (2, 20, 24, 76),
-    'sense':   (2, 78, 24, 110),
-    'buck12':  (120, 2, 160, 34),
-    'buck5':   (120, 36, 160, 68),
-    'ldo':     (162, 7, 184, 24),
-    'latch':   (162, 25, 188, 46),
-    'mcu':     (120, 70, 155, 117),
-    'io':      (157, 48, 188, 78),
-    'conn':    (157, 80, 183, 117),
-    'holes':   None,
+    'bulk':      [(COL0, 2, POWER_X, 18)],
+    'bus_sense': [(1, 58, 21, 92)],
+    'buck12':    [(163, 2, 200, 33)],
+    'buck5':     [(163, 34, 200, 66)],
+    'mcu':       [(163, 67, 200, 97)],
+    'ldo':       [(202, 7, 232, 19)],
+    'latch':     [(202, 20, 238, 41)],
+    'io':        [(202, 42, 238, 62)],
+    'conn':      [(202, 63, 232, 98)],
 }
-for _i, _ph in enumerate('ABC'):
-    _x = 26 + 29 * _i
-    REGIONS.update({
-        f'hifet{_ph}': (_x, 27, _x + 15, 45),
-        f'lofet{_ph}': (_x, 46, _x + 15, 64),
-        f'shunt{_ph}': (_x, 65, _x + 15, 74),
-        f'pad{_ph}':   (_x, 100, _x + 15, 117),
-        f'drv{_ph}':   (_x + 15, 27, _x + 28.5, 64),
-        f'sense{_ph}': (_x + 15, 66, _x + 28.5, 98),
-    })
+for _ph in 'ABC':
+    _x = col_x(_ph)
+    REGIONS[f'drv{_ph}'] = [(_x + 0.5, 21, _x + 13, 37), (_x + 0.5, 47, _x + 13, 78)]
+    REGIONS[f'sense{_ph}'] = [(_x + 27, 58, _x + 35.5, 82)]
 
 
-def pack(fps, region):
-    x0, y0, x1, y1 = region
+def pack(items, regions):
+    """Pack footprints left-to-right, top-to-bottom into the regions in turn."""
+    ri = 0
+    x0, y0, x1, y1 = regions[ri]
     x, y, row = x0, y0, 0.0
-    for fp, (w, h, cx, cy) in fps:
+    for fp, (w, h, cx, cy) in items:
         w += GAP
         h += GAP
-        if x + w > x1 and x > x0:
-            x, y, row = x0, y + row, 0.0
-        if y + h > y1:
-            print(f'warning: region {region} overflow at {fp.GetReference()}')
+        while True:
+            if x + w > x1 and x > x0:
+                x, y, row = x0, y + row, 0.0
+            if y + h <= y1 + 0.01 or ri == len(regions) - 1:
+                break
+            ri += 1
+            x0, y0, x1, y1 = regions[ri]
+            x, y, row = x0, y0, 0.0
+        if y + h > y1 + 0.01:
+            print(f'warning: regions {regions} overflow at {fp.GetReference()}')
         fp.SetPosition(mm(x + w / 2 - cx, y + h / 2 - cy))
         x += w
         row = max(row, h)
+
+
+def place_power(groups):
+    def one(role):
+        return groups.pop(role)[0][0]
+
+    for v, (x, y) in BAT_POS.items():
+        fp = next(f for f, _ in groups['batterm'] if f.GetValue() == v)
+        put(fp, x, y)
+    groups.pop('batterm')
+    put(one('tvs'), *TVS_POS, pad='1', direction='up')    # +48V end towards BAT+
+    ceramics = [f for f, _ in groups.pop('ceramic')]
+    for ph in 'ABC':
+        x = col_x(ph)
+        xf = x + 20.0
+        put(one(f'hifet{ph}'), xf, Y_HI, pad='3', direction='up')     # drain tab to +48V bus
+        put(one(f'lofet{ph}'), xf, Y_LO, pad='3', direction='up')     # drain tab to switch node
+        put(one(f'driver{ph}'), x + 7.0, (Y_HI + Y_LO) / 2, pad='7', direction='right')
+        put(one(f'shunt{ph}'), x + 35.0, Y_SHUNT, pad='1', direction='left')
+        put(one(f'ina{ph}'), x + 31.0, 52.0, pad='1', direction='left')
+        put(one(f'term{ph}'), x + 40.0, Y_TERM)
+        for k, dx in enumerate((-3.4, 3.4)):                          # GND pad up, at the sources
+            put(ceramics[2 * 'ABC'.index(ph) + k], xf + dx, 57.5, pad='2', direction='up')
+    put(one('ntc'), col_x('B') + 20.0, 63.0)                          # next to the middle low-side FET
 
 
 def main():
@@ -167,9 +233,9 @@ def main():
         return nets[name]
 
     groups = {}
-    root = uid('root')
+    ina_caps = []
     for c in circuit.components:
-        g = group_of(c)
+        g = role_of(c, ina_caps)
         if g is None or not c['footprint']:
             continue
         fp = load_fp(c['footprint'])
@@ -196,18 +262,23 @@ def main():
                     pad.SetNet(net(nm))
         groups.setdefault(g, []).append((fp, size_of(fp)))
 
-    # bulk caps etc. pack left-to-right; phases pack top-down
+    place_power(groups)
+    holes = groups.pop('holes')
+    for (fp, _), pos in zip(holes, [(4, 4), (W - 4, 4), (4, H - 4), (W - 4, H - 4)]):
+        fp.SetPosition(mm(*pos))
     for g, items in groups.items():
-        if g == 'holes':
-            for fp, pos in zip([f for f, _ in items], [(4, 4), (W - 4, 4), (4, H - 4), (W - 4, H - 4)]):
-                fp.SetPosition(mm(*pos))
-            continue
         if g.startswith(('drv', 'sense')):
-            items.sort(key=lambda it: -(it[1][0] * it[1][1]))     # IC first
+            items.sort(key=lambda it: -(it[1][0] * it[1][1]))     # biggest first
         pack(items, REGIONS[g])
 
-    # move mounting-hole-clashing bulk region a little: holes sit in corners
-    # board outline
+    # terminals carry big silkscreen labels instead; hole refs would sit off the edge
+    for fp in board.GetFootprints():
+        if fp.GetValue() in ('BAT+', 'BAT-', 'M3') or fp.GetValue().startswith('MOTOR_'):
+            fp.Reference().SetVisible(False)
+        if fp.GetValue() == 'ESDA6V1-5SC6':            # ref clashes with the neighbour's pin-1 mark
+            p = fp.GetPosition()
+            fp.Reference().SetPosition(pcbnew.VECTOR2I(p.x, p.y - pcbnew.FromMM(2.9)))
+
     rect = pcbnew.PCB_SHAPE(board)
     rect.SetShape(pcbnew.SHAPE_T_RECT)
     rect.SetStart(mm(0, 0))
@@ -216,11 +287,17 @@ def main():
     rect.SetWidth(pcbnew.FromMM(0.1))
     board.Add(rect)
 
-    # silkscreen notes
-    for txt, x, y in [('48V 35A BLDC  rev A', 140, 116), ('BAT+ / BAT-', 12, 77)]:
+    # silkscreen: polarity and phase labels next to the terminals
+    labels = [('48V 35A BLDC  rev B', 182, 97.5, 1.2),
+              ('BAT+', BAT_POS['BAT+'][0] + 0.5, BAT_POS['BAT+'][1] + 7.5, 1.5),
+              ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 7.5, 1.5)]
+    labels += [(f'MOTOR {ph}', col_x(ph) + 40.0, Y_TERM - 7.5, 1.5) for ph in 'ABC']
+    for txt, x, y, size in labels:
         t = pcbnew.PCB_TEXT(board)
         t.SetText(txt)
         t.SetPosition(mm(x, y))
+        t.SetTextSize(pcbnew.VECTOR2I(pcbnew.FromMM(size), pcbnew.FromMM(size)))
+        t.SetTextThickness(pcbnew.FromMM(size * 0.15))
         t.SetLayer(pcbnew.F_SilkS)
         board.Add(t)
 

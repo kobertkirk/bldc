@@ -500,6 +500,18 @@ static void suite(void)
     P.thr_v = 0.85;
     run(1.0, NULL);
 
+    printf("== phase short: 120 A current spike while riding ==\n");
+    P.thr_v = 3.0;
+    run(1.0, NULL);
+    P.iq = 120.0;                       /* e.g. motor phase shorted to the frame */
+    run(0.0002, NULL);                  /* 4 PWM periods */
+    CHECK((m.faults & FLT_OVERCURRENT) && !pwm_on,
+          "hard overcurrent trip within 200 us, PWM off (faults 0x%lx)", (unsigned long)m.faults);
+    P.thr_v = 0.85;
+    run(2.0, NULL);
+    CHECK(!(m.faults & FLT_OVERCURRENT) && m.state == ST_IDLE,
+          "overcurrent clears after throttle release (%s)", motor_state_name(m.state));
+
     printf("== over-voltage ==\n");
     P.vbat = 62;
     run(0.1, NULL);

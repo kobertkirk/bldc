@@ -26,12 +26,9 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The 190 × 120 mm 4-layer PCB is **fully routed and passes KiCad DRC with 0
-> unconnected pads and 0 clearance errors**, but the routing was done by an autorouter (Freerouting) plus scripted
-> copper pours. Have it reviewed against the [PCB layout rules](#pcb-layout-rules) before ordering; in particular
-> the INA240 sense lines are not Kelvin-routed as a differential pair, and the router ran the MCU ↔ power-stage
-> signal bus partly on the inner layers, which slots the +48V plane below the FETs (the bus-cap → FET path is not
-> cut, but moving that bus to the outer layers would be better).
+> [Verification](#verification)). The 240 × 100 mm 4-layer PCB (rev B) is **fully routed and passes KiCad DRC with
+> 0 violations and 0 unconnected pads**. The power stage is placed by hand (see [Board](#board)); the signal routing
+> was done by an autorouter (Freerouting) plus scripted copper pours, so have it reviewed before ordering.
 > The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
 > first board up with the current-limited procedure in [First power-up](#first-power-up).
 
@@ -42,11 +39,11 @@ firmware/
 ## Block diagram
 
 ```
- BAT+ ──┬── TVS ── 6×220µF + 8×2.2µF ──┬──────────────────────────────┐
+ BAT+ ──┬── TVS ── 8×220µF + 8×2.2µF ──┬──────────────────────────────┐
         │                               │  3 × half bridge             │
         │   ┌─ LM5164 → +12 V ── LM5109B gate drivers ── 6 × IPT015N10N5 ── 0.5 mΩ ── MOTOR A/B/C
         │   │                                                        │      shunt
-        ├─Q1┤─ LM5164 → +5 V ── AP2112 → +3.3 V                       INA240A2 ×3 (G=50)
+        ├─Q1┤─ LM5164 → +5 V ── AP2112 → +3.3 V                       INA240A1 ×3 (G=20)
         │   │      (halls, throttle)        │                            │
   PWR ──┘   └── PWR_HOLD ◄──────────── STM32G431CB ◄── I_A/B/C, VBUS, throttle, NTCs
   button                                    │  ▲
@@ -57,8 +54,8 @@ firmware/
 
 | Ref | Connector | Pin 1 | Pin 2 | Pin 3 | Pin 4 | Pin 5 | Pin 6 |
 |---|---|---|---|---|---|---|---|
-| J1 / J2 | 5×10 mm solder pads | BAT+ | | | | | |
-| J3–J5 | 5×10 mm solder pads | MOTOR A / B / C | | | | | |
+| J1 / J2 | M5 bolt terminals (left edge, 36 mm apart) | BAT+ / BAT− | | | | | |
+| J3–J5 | M5 bolt terminals (bottom edge) | MOTOR A / B / C | | | | | |
 | HALL | JST-PH 6 | +5 V | GND | Hall A | Hall B | Hall C | Motor NTC (optional) |
 | THROTTLE | JST-PH 3 | +5 V | Signal | GND | | | |
 | FWD/REV | JST-PH 2 | DIR (to GND = reverse) | GND | | | | |
@@ -68,7 +65,8 @@ firmware/
 | SWD | 1×5 header | +3.3 V | SWDIO | SWCLK | NRST | GND | |
 
 The power button and all signal wires carry 3.3–5 V only, never battery voltage, so a cheap handlebar button is fine.
-Battery and phase wires should be 12 AWG (10 AWG for long runs). Put an **XT90-S anti-spark connector** and a
+Battery and phase wires should be 12 AWG (10 AWG for long runs) with M5 ring lugs, bolted to the plated terminals
+(screw, washer and nut; the terminal pads are via-stitched to the inner planes). Put an **XT90-S anti-spark connector** and a
 **40 A fuse** in the battery lead: the board has no reverse-polarity or inrush protection.
 
 ## First power-up
@@ -140,13 +138,14 @@ zero, so the motor can never restart while the throttle is held.
 ## How it works
 
 **Power stage.** Six Infineon IPT015N10N5 (100 V, 1.5 mΩ, TOLL package) are driven by three LM5109B 100 V half-bridge
-drivers through 10 Ω gate resistors, with 10 k pull-downs on the gates and the PWM inputs. The MCU's TIM1 generates
+drivers through 4.7 Ω gate resistors (≈100 ns edges, ≈1.7 W switching loss per phase at 35 A), with 10 k pull-downs on the gates and the PWM inputs. The MCU's TIM1 generates
 20 kHz centre-aligned complementary PWM with 400 ns hardware dead time. With the main output disabled, all six gates
 are held low.
 
-**Current sensing.** There is a 0.5 mΩ shunt in each motor phase, read by an INA240A2. The INA240A2 has gain 50,
-rejects the PWM common-mode swing, accepts −4 to 80 V common mode and is biased to mid-rail. Full scale is ±64 A per
-phase. Sensing in the phase lines means the current is valid at every moment, including during coasting.
+**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Isabellenhütte BVR 4026, 5 W),
+read through its separate sense pads by an INA240A1. The INA240A1 has gain 20, rejects the PWM common-mode swing,
+accepts −4 to 80 V common mode and is biased to mid-rail. Full scale is ±165 A per phase, comfortably above the 80 A
+hard trip (a compile-time check enforces this). Sensing in the phase lines means the current is valid at every moment, including during coasting.
 
 **Control.** The ADCs are triggered by the PWM timer once per period, and the injected-conversion interrupt runs the
 FOC loop at 20 kHz:
@@ -182,9 +181,8 @@ also gives a 20 V UVLO.
 * `hardware/tools/check_netlist.py` exports KiCad's own netlist and checks that **every pin of all 172 parts** sits on
   the intended net, with no single-node nets. KiCad 7's CLI has no ERC, so this replaces it. A deliberately miswired
   pin is caught.
-* KiCad DRC on the routed PCB: **0 unconnected pads, 0 clearance / hole-clearance errors, no shorts, no courtyard
-  overlaps**. The only remaining items are silkscreen cosmetics (a few overlapping reference designators) and a
-  library-table notice that only appears when DRC runs headless.
+* KiCad DRC on the routed PCB: **0 violations, 0 unconnected pads, 0 footprint errors**, including the check that
+  every footprint matches the stock KiCad library (report: `hardware/kicad/routing/drc.rpt`).
 * `cd firmware && make sim` runs the **real** `motor.c`/`hall.c`/`cli.c` in closed loop against a model with:
   dead-time, PWM delay, ADC noise and offsets, 120° halls at an arbitrary offset, a 100 kg rider and a battery with
   internal resistance. It does this for two different motors. Results for motor 1:
@@ -193,8 +191,9 @@ also gives a 20 V UVLO.
   |---|---|
   | Detect R / L / hall angles | 119.9 mΩ (120) / 259 µH (250) / 0.3° worst error |
   | Start from standstill, full throttle | torque ≥ 86 % of command from the first instant |
-  | Peak phase current | 60.1 A (limit 60 A) |
-  | Peak battery current (100 ms avg) | 34.8 A (limit 35 A) |
+  | Peak phase current | 60.2 A (limit 60 A) |
+  | Peak battery current (100 ms avg) | 34.7 A (limit 35 A) |
+  | 120 A phase-short spike | hard trip, gates off within 200 µs |
   | Current-loop tracking | 0.49 A rms |
   | Top speed, 26″ wheel | ≈ 40 km/h (voltage limited) |
   | Coast, re-engage at speed, reverse, brake, throttle-wire break, hall unplug, low battery, overvoltage | all pass |
@@ -216,12 +215,17 @@ KiCad libraries. After you edit the circuit, run `hardware/tools/regen.sh`. It n
 files directly.
 
 `regen.sh` only places the parts. The board was then routed with
-`hardware/tools/route_pcb.py --legacy --freerouting freerouting-1.9.0.jar`. This script:
-- routes every net on all four layers with Freerouting (headless, under `xvfb-run`)
-- imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself
-  and restores any layer-change vias the router left out)
+`hardware/tools/route_pcb.py --legacy --no-optimize --freerouting freerouting-1.9.0.jar`. This script:
+- keeps tracks off the inner layers under the FETs, DC-link caps and shunts (rule area)
+- routes the signals with Freerouting (headless, under `xvfb-run`)
+- imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself,
+  restores any layer-change vias the router left out, and adds one recorded hand route for the connection the
+  router leaves open)
 - adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads
 - fills the zones and writes a DRC report
+
+The routing session is saved in `hardware/kicad/routing/bldc48.ses`, so `route_pcb.py --ses
+../kicad/routing/bldc48.ses` rebuilds the routed board in about a minute without running the autorouter.
 
 `hardware/tools/render3d/render.sh` exports the board to VRML with the KiCad 3D models and renders the PNGs in
 `hardware/renders/` with three.js in headless Chromium.
@@ -241,9 +245,34 @@ Routing (tracks only, pours hidden): ![routing](hardware/renders/bldc48-routing.
 Copper layers: [top](hardware/renders/bldc48-layer-top.png) · [inner 1, GND](hardware/renders/bldc48-layer-in1.png) ·
 [inner 2, +48V/+3V3](hardware/renders/bldc48-layer-in2.png) · [bottom](hardware/renders/bldc48-layer-bottom.png)
 
+Terminals close-up: ![terminals](hardware/renders/bldc48-terminals.png)
+
 Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
-In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. 355 vias in
-the FET, shunt, motor-pad and DC-link capacitor pads tie the outer pours and the planes together.
+In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. The inner
+planes are unbroken under the FETs, DC-link caps and shunts. 1627 track segments, 443 vias, of which 304 are arrays
+in the FET, shunt and DC-link capacitor pads tying the outer pours and the planes together.
+
+## Design review (rev B)
+
+A full review of rev A found and fixed these problems:
+
+| Problem in rev A | Fix in rev B |
+|---|---|
+| BAT+ / BAT− were 5×10 mm SMD solder pads 7.5 mm apart (≈2.5 mm copper gap), 6 mm in from the edge; SMD pads tear off under 12 AWG wire strain | M5 plated bolt terminals for ring lugs, via-stitched to the planes, on the left edge 36 mm apart, TVS between them, large BAT+/BAT− silkscreen |
+| Motor pads sat 38 mm below their shunts | M5 bolt terminals on the bottom edge straight below each shunt, labelled MOTOR A/B/C |
+| **Overcurrent trip could never fire**: INA240A2 (gain 50) saturated the ADC at ±66 A, below the 80 A trip | INA240A1 (gain 20, ±165 A full scale); a compile-time assert keeps the trip inside the measurable range; new simulation test trips on a 120 A spike within 200 µs |
+| INA240 inputs tapped the switch-node/phase copper anywhere, so pour resistance corrupted the current reading | 4-terminal Kelvin shunt (Isabellenhütte BVR 4026, 5 W) with dedicated sense pads to the amplifier |
+| FET temperature sensor TH1 was in the board corner, far from the FETs | TH1 next to the middle low-side FET |
+| DC-link ceramics ~32 mm from the low-side sources (large switching loop) | Ceramics directly under each low-side FET's source leads; both FETs drain-tab up so the switch node is a short gap between them |
+| Low-side gate on the far side of the FET from its driver | Driver beside the FET pair, both gate pins facing it |
+| Router ran signals on In2 straight under the FETs, slotting the +48V plane between the drains and the ceramics | Rule area keeps tracks off both inner layers under the FETs, ceramics and shunts |
+| 10 Ω gate resistors: ≈170 ns edges, ≈2.9 W switching loss per high-side FET at 35 A | 4.7 Ω: ≈100 ns edges, ≈1.7 W |
+| 6 × 220 µF carried ≈2.8 A rms ripple each | 8 × 220 µF, ≈2.1 A each |
+| Pours sized from pad centres missed the TOLL drain tabs' real outline (vias in the tabs connected on one layer only) | Pours drawn from the measured pad outlines; inner planes solid-connected to the power terminals |
+
+Checks run on rev B: every symbol pin matches its footprint pad (29 symbol/footprint pairs), every pin of all 174
+parts is on its intended net, every footprint matches the stock KiCad library, KiCad DRC 0 violations, firmware
+simulation passes on two motors including the new overcurrent test.
 
 ## PCB layout rules
 
@@ -253,15 +282,16 @@ the FET, shunt, motor-pad and DC-link capacitor pads tie the outer pours and the
   next to the bridges.
 * Give the FET drain/source pads thermal-via arrays down to a bottom pour. Bolt the board to an aluminium plate or the
   case through a thermal pad. At 35 A, expect roughly 6–10 W of losses at full load.
-* Kelvin-route each INA240's IN+/IN− as a tight differential pair from the inner edges of its shunt pads.
-* Keep the gate-drive loops short (driver → 10 Ω → gate, source → HS/VSS). Use one solid ground plane, and keep the
+* Route each INA240's IN+/IN− from the shunt's own sense pads (pins 2/3 of the 4-terminal shunt), as a tight pair.
+* Keep the gate-drive loops short (driver → 4.7 Ω → gate, source → HS/VSS). Use one solid ground plane, and keep the
   MCU and analog parts on the side away from the switching nodes.
-* Put TH1 (the NTC) next to the low-side FETs, which run hottest.
+* Keep TH1 (the NTC) next to the low-side FETs, which run hottest.
+* Keep signal tracks off the inner planes under the FETs, DC-link caps and shunts (enforced by a rule area).
 
 ## Things to double-check against datasheets before ordering
 
 * The LM5164 ripple-injection and inductor values were chosen with the datasheet formulas but not run through TI
   WEBENCH.
-* The bulk capacitor ripple rating: ≈ 17 A rms total at 35 A means about 3 A per cap for 6 caps. Use high-ripple
+* The bulk capacitor ripple rating: ≈ 17 A rms total at 35 A means about 2.1 A per cap for 8 caps. Use high-ripple
   parts, or add caps.
 * Choose `v_uv_*` for your pack. The defaults are for 13S.

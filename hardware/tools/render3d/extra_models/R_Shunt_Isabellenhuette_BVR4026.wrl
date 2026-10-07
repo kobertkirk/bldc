@@ -1,0 +1,11 @@
+#VRML V2.0 utf8
+# Render-only stand-in for Isabellenhuette BVR 4026 (not in the KiCad 7 3D library)
+Transform { translation 0.0000 0.3346 0.1772 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.55 0.56 0.58 specularColor 0.6 0.6 0.6 shininess 0.6 } }
+  geometry Box { size 2.0472 2.1260 0.3543 } } ] }
+Transform { translation -1.4370 0.3346 0.1575 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.72 0.45 0.20 specularColor 0.8 0.6 0.4 shininess 0.6 } }
+  geometry Box { size 1.0630 2.2047 0.3150 } } ] }
+Transform { translation 1.4370 0.3346 0.1575 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.72 0.45 0.20 specularColor 0.8 0.6 0.4 shininess 0.6 } }
+  geometry Box { size 1.0630 2.2047 0.3150 } } ] }

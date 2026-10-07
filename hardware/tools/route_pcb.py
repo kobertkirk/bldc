@@ -7,7 +7,8 @@ Autoroute bldc48.kicad_pcb with Freerouting and add the high-current copper.
      plane of another net as an obstacle, which blocks almost every via.
   2. read the SES back (KiCad 7 can only import SES from the GUI, so this
      script parses it itself)
-  3. add the planes - In1.Cu = GND, In2.Cu = +48V (power stage) / +3V3
+  3. a rule area keeps tracks off the inner layers under the power stage, so
+     add the planes - In1.Cu = GND, In2.Cu = +48V (power stage) / +3V3
      (logic) - and outer-layer pours for the 35 A paths: +48V bus, each switch node
      SW_x, each phase output PHASE_x, GND around the low-side FETs, plus a
      GND fill on both outer layers everywhere else
@@ -23,14 +24,18 @@ import sys
 
 import pcbnew
 
+# lets DRC check footprints against the stock libraries via ../kicad/fp-lib-table
+os.environ.setdefault('KICAD7_FOOTPRINT_DIR', '/usr/share/kicad/footprints')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sexp import find, find1, parse  # noqa: E402
 import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 190.0, 120.0
-POWER_X = 116.0            # power stage left of this, logic right of it
+from gen_pcb import COLW, POWER_X, H, W, Y_HI, Y_LO, col_x  # noqa: E402  (board geometry)
+
+KEEPOUT_Y = Y_LO + 23.0     # inner-layer track keepout ends below the shunts/INA240s
 
 
 def mm(x, y):
@@ -62,55 +67,65 @@ def rect(x0, y0, x1, y1):
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
-def pads_bbox(board, net, x0, x1, margin):
-    """bounding box (mm) of all pads of `net` with x in [x0, x1)."""
-    xs, ys = [], []
-    for fp in board.GetFootprints():
-        for p in fp.Pads():
-            if p.GetNetname() != net:
-                continue
-            c = p.GetPosition()
-            if not (x0 <= pcbnew.ToMM(c.x) < x1):
-                continue
-            bb = p.GetBoundingBox()
-            xs += [pcbnew.ToMM(bb.GetLeft()), pcbnew.ToMM(bb.GetRight())]
-            ys += [pcbnew.ToMM(bb.GetTop()), pcbnew.ToMM(bb.GetBottom())]
-    if not xs:
-        return None
-    return min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin
+def plane_keepout(board):
+    """No tracks on In1/In2 under the FETs, DC-link caps and shunts: the GND and
+    +48V planes there carry the DC-link and switching currents and must stay
+    unbroken.  Vias may pass through.  Signals may still use the inner layers
+    under the controller and in a channel along the bottom of the power stage
+    (below KEEPOUT_Y), where the planes only carry logic return current."""
+    z = pcbnew.ZONE(board)
+    z.SetIsRuleArea(True)
+    z.SetDoNotAllowTracks(True)
+    z.SetDoNotAllowVias(False)
+    z.SetDoNotAllowPads(False)
+    z.SetDoNotAllowCopperPour(False)
+    z.SetDoNotAllowFootprints(False)
+    ls = pcbnew.LSET()
+    ls.AddLayer(pcbnew.In1_Cu)
+    ls.AddLayer(pcbnew.In2_Cu)
+    z.SetLayerSet(ls)
+    z.SetZoneName('power-stage plane keepout')
+    o = z.Outline()
+    o.NewOutline()
+    for x, y in rect(0.2, 0.2, POWER_X + 1.0, KEEPOUT_Y):
+        o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
+    board.Add(z)
 
 
 def inner_planes(board):
-    add_zone(board, 'GND', pcbnew.In1_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), solid=False)
-    add_zone(board, '+48V', pcbnew.In2_Cu, rect(0.5, 0.5, POWER_X - 0.5, H - 0.5))
-    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(POWER_X + 0.5, 0.5, W - 0.5, H - 0.5))
+    # solid pad connections: the M5 power terminals and FET via arrays must not
+    # be throttled by thermal spokes
+    add_zone(board, 'GND', pcbnew.In1_Cu, rect(0.5, 0.5, W - 0.5, H - 0.5), solid=True)
+    add_zone(board, '+48V', pcbnew.In2_Cu, rect(0.5, 0.5, POWER_X - 0.5, H - 0.5), solid=True)
+    add_zone(board, '+3V3', pcbnew.In2_Cu, rect(POWER_X + 0.5, 0.5, W - 0.5, H - 0.5), solid=True)
 
 
-def outer_pours(board):
+def outer_pours(board, hv_clear=0.5):
+    """High-current copper on both outer layers (geometry from gen_pcb.py).
+
+    Per phase column at x = X:
+      SW_x     high-side source leads + the whole low-side drain tab, out to
+               the shunt's current pad                  (priority 5)
+      PHASE_x  shunt current pad down to the motor terminal (priority 5)
+      GND      low-side source leads + DC-link ceramics  (priority 4)
+    +48V bus along the top: battery terminal, bulk caps, high-side drain tabs
+    (priority 3); GND fills the rest (priority 1).  48-60 V pours keep 0.5 mm
+    from other nets.
+    """
     for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
-        # phase columns: SW node (FETs + shunt input) and phase output
-        for i, ph in enumerate('ABC'):
-            x = 26 + 29 * i
-            bb = pads_bbox(board, f'SW_{ph}', x - 1, x + 15, 1.0)
-            if bb:
-                add_zone(board, f'SW_{ph}', layer, rect(*bb), priority=5, solid=True)
-            bb = pads_bbox(board, f'PHASE_{ph}', x - 1, x + 15, 1.0)
-            if bb:
-                add_zone(board, f'PHASE_{ph}', layer, rect(bb[0], bb[1], bb[2], max(bb[3], 117)),
-                         priority=5, solid=True)
-        # +48V bus: bulk caps, ceramics and high-side drains, battery pad
-        add_zone(board, '+48V', layer, rect(1, 1, 113, 26), priority=3, solid=True)
-        bb = pads_bbox(board, '+48V', 0, 25, 1.5)
-        if bb:
-            add_zone(board, '+48V', layer, rect(*bb), priority=3, solid=True)
-        # everything else: GND (solid pad connection: reflow assembly)
+        for ph in 'ABC':
+            x = col_x(ph)
+            add_zone(board, f'SW_{ph}', layer, rect(x + 14.5, Y_HI + 3.0, x + 33.0, Y_LO + 2.0),
+                     priority=5, clearance=hv_clear, solid=True)
+            add_zone(board, f'PHASE_{ph}', layer, rect(x + 36.2, Y_HI + 3.5, x + COLW - 0.4, H - 0.6),
+                     priority=5, clearance=hv_clear, solid=True)
+            add_zone(board, 'GND', layer, rect(x + 13.5, Y_LO + 3.3, x + 27.0, Y_LO + 16.0),
+                     priority=4, solid=True)
+        add_zone(board, '+48V', layer, rect(0.6, 0.6, POWER_X - 0.5, Y_HI + 2.3),
+                 priority=3, clearance=hv_clear, solid=True)
+        add_zone(board, '+48V', layer, rect(0.6, 0.6, 21.0, 30.5),
+                 priority=3, clearance=hv_clear, solid=True)
         add_zone(board, 'GND', layer, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1, solid=True)
-        # +48V into each high-side FET drain tab
-        for i in range(3):
-            x = 26 + 29 * i
-            bb = pads_bbox(board, '+48V', x - 1, x + 15, 1.0)
-            if bb:
-                add_zone(board, '+48V', layer, rect(*bb), priority=4, solid=True)
 
 
 POWER_PAD_NETS = ('GND', '+48V', 'SW_', 'PHASE_')
@@ -193,6 +208,49 @@ def fill(board):
 
 
 # ---------------------------------------------------------------- Specctra
+# Hand routes for connections Freerouting 1.9 leaves open on this placement.
+# Each is only added if no track of the net already reaches the pad, and was
+# verified with a full zone refill + DRC (0 violations).
+#   (net, (ref, pad), [segments]); segment = ('F'|'B', [points]) or ('V', point)
+HAND_ROUTES = [
+    ('HB_B', ('U6', '8'), [            # bootstrap cap C39 -> driver HB pin, over the driver
+        ('F', [(70.25, 28.475), (70.25, 29.9)]), ('V', (70.25, 29.9)),
+        ('B', [(70.25, 29.9), (77.475, 29.9), (77.475, 34.0)]), ('V', (77.475, 34.0)),
+        ('F', [(77.475, 34.0), (77.475, 35.6)]),
+    ]),
+]
+
+
+def hand_routes(board):
+    added = 0
+    for netname, (ref, padnum), segs in HAND_ROUTES:
+        ni = board.FindNet(netname)
+        pad = next(p for p in board.FindFootprintByReference(ref).Pads() if p.GetNumber() == padnum)
+        reached = any(t.GetNetCode() == ni.GetNetCode() and t.GetClass() == 'PCB_TRACK' and
+                      (pad.HitTest(t.GetStart()) or pad.HitTest(t.GetEnd())) for t in board.GetTracks())
+        if reached:
+            continue
+        for kind, data in segs:
+            if kind == 'V':
+                v = pcbnew.PCB_VIA(board)
+                v.SetPosition(mm(*data))
+                v.SetWidth(pcbnew.FromMM(0.6))
+                v.SetDrill(pcbnew.FromMM(0.3))
+                v.SetNet(ni)
+                board.Add(v)
+            else:
+                for a, b in zip(data, data[1:]):
+                    t = pcbnew.PCB_TRACK(board)
+                    t.SetStart(mm(*a))
+                    t.SetEnd(mm(*b))
+                    t.SetWidth(pcbnew.FromMM(0.25))
+                    t.SetLayer(pcbnew.F_Cu if kind == 'F' else pcbnew.B_Cu)
+                    t.SetNet(ni)
+                    board.Add(t)
+        added += 1
+    return added
+
+
 def through_hole_at(board, q, ni):
     pos = mm(*q)
     for fp in board.GetFootprints():
@@ -279,6 +337,8 @@ def main():
     ap.add_argument('--legacy', action='store_true',
                     help='Freerouting 1.x command line (needs a display: runs under xvfb-run)')
     ap.add_argument('--ses', help='skip routing and import this SES file')
+    ap.add_argument('--no-optimize', action='store_true',
+                    help='skip Freerouting route optimisation (1.9 can hang in it)')
     args = ap.parse_args()
     os.makedirs(args.workdir, exist_ok=True)
     dsn = os.path.join(args.workdir, 'bldc48.dsn')
@@ -289,6 +349,7 @@ def main():
     ds = board.GetDesignSettings()
     ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
     ds.SetCustomViaSize(True)
+    plane_keepout(board)
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
     print('DSN written')
@@ -301,6 +362,8 @@ def main():
         if args.legacy:
             cmd = ['xvfb-run', '-a', 'java', '-jar', args.freerouting, '-de', dsn, '-do', ses,
                    '-mp', str(args.passes)]
+            if args.no_optimize:
+                cmd += ['-mt', '0']
         else:
             cmd = ['java', '-jar', args.freerouting, '--gui.enabled=false', '-de', dsn, '-do', ses,
                    f'--router.max_passes={args.passes}']
@@ -311,6 +374,7 @@ def main():
 
     nt, nv = import_ses(board, ses)
     print(f'imported {nt} track segments, {nv} vias')
+    print(f'added {hand_routes(board)} hand route(s)')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
     outer_pours(board)

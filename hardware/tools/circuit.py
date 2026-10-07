@@ -50,7 +50,10 @@ FP_SMA = 'Diode_SMD:D_SMA'
 FP_SMC = 'Diode_SMD:D_SMC'
 FP_SOT23 = 'Package_TO_SOT_SMD:SOT-23'
 FP_LED = 'LED_SMD:LED_0603_1608Metric'
-FP_WIREPAD = 'Connector_Wire:SolderWirePad_1x01_SMD_5x10mm'
+# Power terminals: M5 plated bolt-down pads (ring lug on 10-12 AWG), via-stitched
+# to the inner planes.  SMD solder pads tear off under wire strain at 35 A.
+FP_TERMINAL = 'MountingHole:MountingHole_5.3mm_M5_Pad_Via'
+FP_SHUNT = 'Resistor_SMD:R_Shunt_Isabellenhuette_BVR4026'
 FP_FB = 'Inductor_SMD:L_0603_1608Metric'
 
 
@@ -90,9 +93,10 @@ def CONN(sheet, n, nets, fp=None, value=None, **kw):
 # ============================================================================
 S = 'power'
 
-# Battery input pads (solder 10-12 AWG directly; use an XT90-S anti-spark plug)
-CONN(S, 1, ['+48V'], fp=FP_WIREPAD, value='BAT+')
-CONN(S, 1, ['GND'], fp=FP_WIREPAD, value='BAT-')
+# Battery input: M5 bolt terminals at the board edge, 36 mm apart (ring lugs on
+# 10-12 AWG; put an XT90-S anti-spark plug and a 40 A fuse in the battery lead)
+CONN(S, 1, ['+48V'], fp=FP_TERMINAL, value='BAT+', MPN='M5 ring lug terminal')
+CONN(S, 1, ['GND'], fp=FP_TERMINAL, value='BAT-', MPN='M5 ring lug terminal')
 part(S, 'D', 'Device:D_TVS', 'SMCJ60CA', FP_SMC, {'1': '+48V', '2': 'GND'})
 
 # --- Soft power latch ---------------------------------------------------------
@@ -179,9 +183,10 @@ for net in ['+48V', 'GND', '+12V', '+5V']:
 # ============================================================================
 S = 'bridge'
 
-# DC-link capacitance: 6 x 220 uF/100 V low-ESR + 6 x 2.2 uF/100 V X7R
-for i in range(6):
-    CP(S, '220u/100V', '+48V', 'GND', MPN='Panasonic EEU-FS2A221 (or eq. low-ESR)')
+# DC-link capacitance: 8 x 220 uF/100 V low-ESR (~17 A rms ripple at 35 A ->
+# ~2.1 A per cap) + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
+for i in range(8):
+    CP(S, '220u/100V', '+48V', 'GND', MPN='Panasonic EEU-FS2A221 or eq. low-ESR, >=2.1 A ripple')
 for i in range(6):
     C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
 
@@ -203,25 +208,29 @@ for ph in 'ABC':
     D(S, 'ES1D', '+12V', f'HB_{ph}', fp=FP_SMA)
     C(S, '2.2u/25V', f'HB_{ph}', sw, fp=FP_C0805)
     # high side FET
-    R(S, '10R', f'HO_{ph}', f'GH_{ph}')
+    R(S, '4R7', f'HO_{ph}', f'GH_{ph}')      # ~100 ns edges: ~1.7 W switching loss/phase at 35 A
     R(S, '10k', f'GH_{ph}', sw)
     part(S, 'Q', 'Transistor_FET:IPT015N10N5', 'IPT015N10N5', FP_FET,
          {'G': f'GH_{ph}', 'D': '+48V', 'S': sw})
     # low side FET
-    R(S, '10R', f'LO_{ph}', f'GL_{ph}')
+    R(S, '4R7', f'LO_{ph}', f'GL_{ph}')
     R(S, '10k', f'GL_{ph}', 'GND')
     part(S, 'Q', 'Transistor_FET:IPT015N10N5', 'IPT015N10N5', FP_FET,
          {'G': f'GL_{ph}', 'D': sw, 'S': 'GND'})
-    # in-line phase shunt + INA240A2 (gain 50, PWM-rejection, -4..80 V CM)
-    R(S, '0.5m', sw, phn, fp=FP_R2512, MPN='Bourns CRA2512-FZ-R500ELF (3 W)')
-    part(S, 'U', 'Amplifier_Current:INA240A2D', 'INA240A2D', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm',
-         {'+': sw, '-': phn, 'V+': '+3V3', 'GND': 'GND', 'REF1': '+3V3', 'REF2': 'GND',
+    # 4-terminal (Kelvin) phase shunt: pins 1/4 carry current, 2/3 are the sense
+    # taps, so copper drop in the pours never reaches the amplifier
+    part(S, 'R', 'Device:R_Shunt', '0.5m', FP_SHUNT,
+         {'1': sw, '4': phn, '2': f'ISP_{ph}', '3': f'ISN_{ph}'},
+         MPN='Isabellenhuette BVR 4026, 0.5 mOhm, 5 W')
+    # INA240A1: gain 20 -> +/-165 A full scale, so the 80 A hard trip is measurable
+    part(S, 'U', 'Amplifier_Current:INA240A1D', 'INA240A1D', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm',
+         {'+': f'ISP_{ph}', '-': f'ISN_{ph}', 'V+': '+3V3', 'GND': 'GND', 'REF1': '+3V3', 'REF2': 'GND',
           '5': f'ISO_{ph}'})
     C(S, '100n', '+3V3', 'GND')
     R(S, '100R', f'ISO_{ph}', f'ISENSE_{ph}')
     C(S, '1n', f'ISENSE_{ph}', 'GND')
     # motor phase output pad
-    CONN(S, 1, [phn], fp=FP_WIREPAD, value=f'MOTOR_{ph}')
+    CONN(S, 1, [phn], fp=FP_TERMINAL, value=f'MOTOR_{ph}', MPN='M5 ring lug terminal')
 
 # Board-mounted NTC next to low-side FETs
 R(S, '10k', '+3V3', 'TEMP_FET')

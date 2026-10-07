@@ -339,7 +339,7 @@ class SheetWriter:
 def title_block(title, page_comment=''):
     return (f'  (title_block\n    (title {q(title)})\n    (date "2026-10-06")\n    (rev "A")\n'
             f'    (company "48V 35A hub motor controller")\n'
-            f'    (comment 1 "STM32G431 + LM5109B x3 + IPT015N10N5 x6 + INA240A2 x3")\n'
+            f'    (comment 1 "STM32G431 + LM5109B x3 + IPT015N10N5 x6 + INA240A1 x3")\n'
             f'    (comment 2 {q(page_comment)})\n  )\n')
 
 
