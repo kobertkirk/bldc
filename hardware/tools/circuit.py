@@ -222,7 +222,7 @@ for ph in 'ABC':
     # taps, so copper drop in the pours never reaches the amplifier
     part(S, 'R', 'Device:R_Shunt', '0.5m', FP_SHUNT,
          {'1': sw, '4': phn, '2': f'ISP_{ph}', '3': f'ISN_{ph}'},
-         MPN='Bourns CSS4J-4026R-L500F (LCSC C2076423) or Isabellenhuette BVR 4026; 0.5 mOhm 1% 5 W')
+         MPN='Bourns CSS4J-4026R-L500F (LCSC C2076423), 0.5 mOhm 1% 5 W')
     # INA240A1: gain 20 -> +/-165 A full scale, so the 80 A hard trip is measurable
     part(S, 'U', 'Amplifier_Current:INA240A1D', 'INA240A1D', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm',
          {'+': f'ISP_{ph}', '-': f'ISN_{ph}', 'V+': '+3V3', 'GND': 'GND', 'REF1': '+3V3', 'REF2': 'GND',

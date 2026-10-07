@@ -142,7 +142,7 @@ drivers through 4.7 Ω gate resistors (≈100 ns edges, ≈1.7 W switching loss 
 20 kHz centre-aligned complementary PWM with 400 ns hardware dead time. With the main output disabled, all six gates
 are held low.
 
-**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Bourns CSS4J-4026R-L500F or Isabellenhütte BVR 4026, 5 W),
+**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Bourns CSS4J-4026R-L500F, 5 W),
 read through its separate sense pads by an INA240A1. The INA240A1 has gain 20, rejects the PWM common-mode swing,
 accepts −4 to 80 V common mode and is biased to mid-rail. Full scale is ±165 A per phase, comfortably above the 80 A
 hard trip (a compile-time check enforces this). Sensing in the phase lines means the current is valid at every moment, including during coasting.
@@ -279,16 +279,16 @@ real quote, because their prices change often.
 | PCBA setup + stencil (economic) | ≈ $10 |
 | "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
 | SMT + through-hole joints (≈ 700 SMT + ≈ 60 THT per board) | ≈ $15 |
-| Components (BOM ≈ $40/board) | ≈ $200 |
+| Components (BOM ≈ $32/board) | ≈ $160 |
 | Shipping (DHL / FedEx) | $20–35 |
-| **Total for 5** | **≈ $330–420, about $65–85 per board** |
+| **Total for 5** | **≈ $290–380, about $58–76 per board** |
 
 - JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
   2-board order is still about $200, so most of the cost of a small order is fees.
-- LCSC (JLCPCB's parts store) does not stock the Isabellenhütte BVR 4026 shunts. Use the Bourns
-  CSS4J-4026R-L500F instead (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal, 10.06 × 6.60 mm). Its recommended
-  land pattern has the same 10.6 mm span, 5.6 mm current pads and 0.9 mm sense pads as the BVR 4026 footprint on the
-  board, so no layout change is needed. Check it against the Bourns datasheet before ordering. Avoid 3 % parts such as
+- The shunts are Bourns CSS4J-4026R-L500F (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal, 10.06 × 6.60 mm),
+  which JLCPCB can place. The footprint is KiCad's `R_Shunt_Isabellenhuette_BVR4026`: Bourns' recommended land
+  pattern has the same 10.6 mm span, 5.6 mm current pads and 0.9 mm sense pads, so the Isabellenhütte BVR 4026 also
+  fits as a drop-in alternative. Check the pad drawing against the Bourns datasheet before ordering. Avoid 3 % parts such as
   the Milliohm HOVB4026-5W-0.5mR-3%: they add up to 3 % gain error to every current reading.
 - Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
   220 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
@@ -303,7 +303,7 @@ A full review of rev A found and fixed these problems:
 | BAT+ / BAT− were 5×10 mm SMD solder pads 7.5 mm apart (≈2.5 mm copper gap), 6 mm in from the edge; SMD pads tear off under 12 AWG wire strain | M5 plated bolt terminals for ring lugs, via-stitched to the planes, on the left edge 36 mm apart, TVS between them, large BAT+/BAT− silkscreen |
 | Motor pads sat 38 mm below their shunts | M5 bolt terminals on the bottom edge straight below each shunt, labelled MOTOR A/B/C |
 | **Overcurrent trip could never fire**: INA240A2 (gain 50) saturated the ADC at ±66 A, below the 80 A trip | INA240A1 (gain 20, ±165 A full scale); a compile-time assert keeps the trip inside the measurable range; new simulation test trips on a 120 A spike within 200 µs |
-| INA240 inputs tapped the switch-node/phase copper anywhere, so pour resistance corrupted the current reading | 4-terminal Kelvin shunt (Isabellenhütte BVR 4026, 5 W) with dedicated sense pads to the amplifier |
+| INA240 inputs tapped the switch-node/phase copper anywhere, so pour resistance corrupted the current reading | 4-terminal Kelvin shunt (Bourns CSS4J-4026R-L500F, 5 W) with dedicated sense pads to the amplifier |
 | FET temperature sensor TH1 was in the board corner, far from the FETs | TH1 next to the middle low-side FET |
 | DC-link ceramics ~32 mm from the low-side sources (large switching loop) | Ceramics directly under each low-side FET's source leads; both FETs drain-tab up so the switch node is a short gap between them |
 | Low-side gate on the far side of the FET from its driver | Driver beside the FET pair, both gate pins facing it |
