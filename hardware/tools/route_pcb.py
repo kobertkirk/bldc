@@ -133,11 +133,18 @@ def phase_keepout(board):
 PLANE_NETS = ('GND',)            # reaches the solid In1 plane through fan-out vias
 
 
-def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, drill=0.3, stub_w=0.3):
+FANOUT_FAILS = []                                   # (net, pad xy): left to the grid router
+
+
+def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, drill=0.3, stub_w=0.3,
+           avoid=((), ())):
     """Give every GND / +3V3 SMD pad outside the power array its own via into
     the solid In1 GND plane, with a short stub.  The autorouter
     then never has to draw these nets, which is most of the congestion on a
-    small two-sided board.  Candidate spots go outward from the part first."""
+    small two-sided board.  Candidate spots go outward from the part first.
+    `avoid` = (segments, vias) of an existing SES that the second pass keeps
+    clear of, so a rebuild from that SES stays DRC clean."""
+    segs, svias = avoid
     clear, hole_clear = 0.22, 0.27
     pads = [p for f in board.GetFootprints() for p in f.Pads()]
     rule_areas = [z for z in board.Zones() if z.GetIsRuleArea() and z.GetDoNotAllowVias()]
@@ -174,11 +181,36 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
         t.SetNet(pad.GetNet())
         board.Add(t)
 
-    def try_via(pad, layer, px, py, cands, w, cl):
+    def seg_d(x, y, s):
+        x0, y0, x1, y1 = s[:4]
+        L2 = (x1 - x0) ** 2 + (y1 - y0) ** 2
+        t = 0 if L2 == 0 else max(0, min(1, ((x - x0) * (x1 - x0) + (y - y0) * (y1 - y0)) / L2))
+        return math.hypot(x - x0 - t * (x1 - x0), y - y0 - t * (y1 - y0))
+
+    def clear_of_ses(a, b, layer, w, via):
+        if not segs and not svias:
+            return True
+        lname = board.GetLayerName(layer)
+        n = max(2, int(math.dist(a, b) / 0.1))
+        pts = [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+        for s in segs:
+            if any(s[5] == lname and seg_d(x, y, s) < s[4] / 2 + w / 2 + 0.2 for x, y in pts):
+                return False
+            if via and seg_d(b[0], b[1], s) < s[4] / 2 + via_d / 2 + 0.25:
+                return False
+        for x, y, dia in svias:
+            if any(math.hypot(px - x, py - y) < dia / 2 + w / 2 + 0.2 for px, py in pts):
+                return False
+            if via and math.hypot(b[0] - x, b[1] - y) < dia / 2 + via_d / 2 + 0.3:
+                return False
+        return True
+
+    def try_via(pad, layer, px, py, cands, w, cl, check_ses=False):
         for vx, vy in cands:
             vx, vy = round(vx, 3), round(vy, 3)
             if ok_via(vx, vy, pad.GetNetCode()) and ok_stub((px, py), (vx, vy), layer,
-                                                           pad.GetNetCode(), w, cl):
+                                                           pad.GetNetCode(), w, cl) and \
+                    (not check_ses or clear_of_ses((px, py), (vx, vy), layer, w, True)):
                 add_stub(pad, layer, (px, py), (vx, vy), w)
                 v = pcbnew.PCB_VIA(board)
                 v.SetPosition(mm(vx, vy))
@@ -192,6 +224,7 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
 
     added = 0
     todo = []
+    FANOUT_FAILS.clear()
     for fp in board.GetFootprints():
         c = fp.GetPosition()
         cx, cy = pcbnew.ToMM(c.x), pcbnew.ToMM(c.y)
@@ -225,7 +258,7 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
         angs = [axis, axis + math.pi] + [ang0 + math.radians(da)
                                          for da in (0, 45, -45, 90, -90, 135, -135, 180)]
         cands = [(px + d * math.cos(a), py + d * math.sin(a)) for d in dist for a in angs]
-        if try_via(pad, layer, px, py, cands, w, 0.2):
+        if try_via(pad, layer, px, py, cands, w, 0.2, check_ses=True):
             added += 1
             continue
         # a ground pin next to the part's own exposed pad: tie it straight across
@@ -234,11 +267,13 @@ def fanout(board, dist=(0.9, 1.25, 1.6, 2.0, 2.5, 3.0, 3.5, 4.0), via_d=0.6, dri
         ep = [q for q in fp.Pads() if q.GetNetCode() == pad.GetNetCode() and q.GetNumber() != pad.GetNumber()
               and q.GetAttribute() == pcbnew.PAD_ATTRIB_SMD and q.IsOnLayer(layer)
               and pcbnew.ToMM(q.GetBoundingBox().GetWidth()) > 2.0 and q.HitTest(mm(ex, ey))]
-        if ep and ok_stub((px, py), (ex, ey), layer, pad.GetNetCode(), w, 0.2):
+        if ep and ok_stub((px, py), (ex, ey), layer, pad.GetNetCode(), w, 0.2) and \
+                clear_of_ses((px, py), (ex, ey), layer, w, False):
             add_stub(pad, layer, (px, py), (ex, ey), w)
             added += 1
             continue
         print(f'  no fan-out spot for {fp.GetReference()} pad {pad.GetNumber()} ({pad.GetNetname()})')
+        FANOUT_FAILS.append((pad.GetNetname(), (px, py)))
     return added
 
 
@@ -620,6 +655,16 @@ def grid_finish(board, first=()):
     import astar_route
     items, _ = drc(board)
     done, fails = 0, []
+    for net, a in FANOUT_FAILS:                 # plane pins with no room for a stub via
+        try:
+            g, path = astar_route.route(board, net, a, a, to_plane=True, fence=False)
+        except SystemExit:
+            print(f'  grid router found no plane via for {net} at {a}')
+            continue
+        _add_items(board, net, astar_route.to_hand_route(g, path, a, None))
+        done += 1
+    if FANOUT_FAILS:
+        items, _ = drc(board)
     todo = [it for it in items if it[0] == 'unconnected_items' and len(it[1]) >= 2]
     netof = lambda it: re.search(r'\[(.*?)\]', it[1][0][2]).group(1)   # noqa: E731
     todo.sort(key=lambda it: netof(it) not in first)          # previously stuck ones first
@@ -722,6 +767,29 @@ def auto_repair(board, max_tries=400):
         else:
             print(f'  could not repair {net}')
     return fixed
+
+
+def ses_obstacles(ses_path):
+    """Wires and vias of a SES (non-plane nets) as ((x0, y0, x1, y1, w, layer), ...), ((x, y, dia), ...)."""
+    if not ses_path or not os.path.exists(ses_path):
+        return (), ()
+    root = parse(open(ses_path).read())
+    routes = find1(root, 'routes')
+    res = find1(routes, 'resolution')
+    scale = {'um': 1e-3, 'mm': 1.0, 'mil': 0.0254, 'inch': 25.4}[str(res[1])] / float(res[2])
+    segs, vias = [], []
+    for net in find(find1(routes, 'network_out'), 'net'):
+        if net[1] in PLANE_NETS:
+            continue
+        for wire in find(net, 'wire'):
+            path = find1(wire, 'path')
+            c = [float(v) * scale for v in path[3:]]
+            pts = [(c[i], -c[i + 1]) for i in range(0, len(c), 2)]
+            for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                segs.append((x0, y0, x1, y1, float(path[2]) * scale, str(path[1])))
+        for via in find(net, 'via'):
+            vias.append((float(via[2]) * scale, -float(via[3]) * scale, 0.6))
+    return segs, vias
 
 
 def import_ses(board, ses_path, extra_rip=()):
@@ -829,7 +897,8 @@ def main():
     plane_keepout(board)
     phase_keepout(board)
     edge_keepout(board)
-    print(f'fan-out: {fanout(board)} plane vias')
+    avoid = ses_obstacles(args.ses)
+    print(f'fan-out: {fanout(board, avoid=avoid)} plane vias')
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
     patch_dsn(dsn, board)
@@ -866,7 +935,7 @@ def main():
             plane_keepout(board)
             phase_keepout(board)
             edge_keepout(board)
-            fanout(board)
+            fanout(board, avoid=avoid)
         nt, nv = import_ses(board, ses, extra_rip=rip)
         print(f'imported {nt} track segments, {nv} vias')
         print(f'added {hand_routes(board, ses)} hand route(s)')

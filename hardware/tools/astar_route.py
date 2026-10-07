@@ -255,7 +255,7 @@ def route(board, net, a, b, to_plane=False, fence=True, soft=False):
         _, c, i, j, k = heapq.heappop(pq)
         if c > cost.get((i, j, k), 1e18):
             continue
-        if to_plane and on_3v3(i, j) and not g.via[j * nx + i]:
+        if to_plane and (net == 'GND' or on_3v3(i, j)) and not g.via[j * nx + i]:
             goal = (i, j, k)
             break
         if not to_plane and (i, j) == (ti, tj) and k in gl:
@@ -284,7 +284,8 @@ def route(board, net, a, b, to_plane=False, fence=True, soft=False):
         raise SystemExit(f'{net}: no path')
     path, n = [], goal
     if to_plane:                                   # finish with the via into the plane
-        path.append((goal[0], goal[1], LAYERS.index(pcbnew.In2_Cu)))
+        plane = pcbnew.In1_Cu if net == 'GND' else pcbnew.In2_Cu
+        path.append((goal[0], goal[1], LAYERS.index(plane)))
         path.append(goal)
     while n:
         path.append(n)
