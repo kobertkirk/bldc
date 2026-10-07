@@ -133,6 +133,38 @@ def phase_keepout(board):
 PLANE_NETS = ('GND',)            # reaches the solid In1 plane through fan-out vias
 
 
+def sense_taps(board):
+    """One fixed via per phase in the gap between the high-side source pad and
+    the low-side drain tab (both the switch node), in the open strip left of
+    the outer-layer keep-out.  It ties the two pads to the B.Cu switch-node
+    pour and gives the DRV8353 SHx sense trace a target it can reach, right
+    beside the high-side gate pin (Kelvin source sensing)."""
+    n = 0
+    for ph in 'ABC':
+        net = f'SW_{ph}'
+        src = tab = None
+        for fp in board.GetFootprints():
+            for p in fp.Pads():
+                if p.GetNetname() != net:
+                    continue
+                if fp.GetValue().startswith('IPT') and p.GetNumber() == '2':
+                    src = p.GetBoundingBox()
+                if fp.GetValue().startswith('IPT') and p.GetNumber() == '3':
+                    tab = p.GetBoundingBox()
+        if not src or not tab:
+            continue
+        x = min(pcbnew.ToMM(src.GetX()) + 0.6, col_x(ph) + OPEN_X - 0.45)
+        y = (pcbnew.ToMM(src.GetBottom()) + pcbnew.ToMM(tab.GetY())) / 2
+        v = pcbnew.PCB_VIA(board)
+        v.SetPosition(mm(x, y))
+        v.SetWidth(pcbnew.FromMM(0.6))
+        v.SetDrill(pcbnew.FromMM(0.3))
+        v.SetNet(board.FindNet(net))
+        board.Add(v)
+        n += 1
+    return n
+
+
 FANOUT_FAILS = []                                   # (net, pad xy): left to the grid router
 
 
@@ -330,6 +362,8 @@ def patch_dsn(path, board, clearance_um=210):
                      lambda m: m.group(1) + m.group(2) + (' ' + keep if keep else '') + ')', txt)
         # and the router must leave the fan-out stubs and vias where they are
         txt = txt.replace(f'(net {pn})(type route)', f'(net {pn})(type fix)')
+    for ph in 'ABC':               # the sense-tap vias stay put
+        txt = txt.replace(f'(net SW_{ph})(type route)', f'(net SW_{ph})(type fix)')
     motor = [fp.GetReference() for fp in board.GetFootprints() if fp.GetValue().startswith('MOTOR_')]
     for ref in motor:
         txt = re.sub(r' %s-[0-9@]+(?=[\s)])' % re.escape(ref), '', txt)
@@ -869,7 +903,7 @@ def import_ses(board, ses_path, extra_rip=()):
         if net[1] in rip:
             print(f'ripped up the router wiring of {net[1]}')
             continue
-        plane = net[1] in PLANE_NETS        # our own fan-out is already on the board:
+        plane = net[1] in PLANE_NETS or net[1].startswith('SW_')   # own fan-out / taps already there:
         ni = board.FindNet(net[1])           # take only what the router added to it
         r2 = lambda q: (round(q[0], 2), round(q[1], 2))                  # noqa: E731
         have = {r2(pcbnew.ToMM(t.GetStart())) for t in board.GetTracks() if t.GetNetCode() == ni.GetNetCode()} | \
@@ -951,7 +985,7 @@ def main():
     phase_keepout(board)
     edge_keepout(board)
     avoid = ses_obstacles(args.ses) if args.avoid_ses else ((), ())
-    print(f'fan-out: {fanout(board, avoid=avoid)} plane vias')
+    print(f'fan-out: {fanout(board, avoid=avoid)} plane vias, {sense_taps(board)} sense taps')
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
     patch_dsn(dsn, board)
@@ -989,6 +1023,7 @@ def main():
             phase_keepout(board)
             edge_keepout(board)
             fanout(board, avoid=avoid)
+            sense_taps(board)
         nt, nv = import_ses(board, ses, extra_rip=rip)
         print(f'imported {nt} track segments, {nv} vias')
         print(f'added {hand_routes(board, ses)} hand route(s)')
