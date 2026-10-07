@@ -137,7 +137,7 @@ R(S, '100k', 'RON12', 'GND')
 C(S, '2.2n', 'BST12', 'SW12')
 # 12 V load is ~0.1 A (gate drive): peak = load + ripple/2 = ~0.35 A
 part(S, 'L', 'Device:L', '68u', 'Inductor_SMD:L_Bourns_SRN8040TA',
-     {'1': 'SW12', '2': '+12V'}, MPN='Bourns SRN8040TA-680M or eq. (68 uH, Isat >= 0.8 A, 8x8 mm)')
+     {'1': 'SW12', '2': '+12V'}, MPN='Bourns SRN8040TA-680M (LCSC C2047059)')
 R(S, '90.9k', '+12V', 'FB12')
 R(S, '10k', 'FB12', 'GND')
 # Type-3 ripple injection: RA = (Vin-Vout)*ton/(25mV*CA)
@@ -158,7 +158,7 @@ part(S, 'U', 'Regulator_Switching:LM5164DDA', 'LM5164DDA',
 R(S, '41.2k', 'RON5', 'GND')
 C(S, '2.2n', 'BST5', 'SW5')
 part(S, 'L', 'Device:L', '33u', 'Inductor_SMD:L_Bourns_SRN8040TA',
-     {'1': 'SW5', '2': '+5V'}, MPN='Bourns SRN8040TA-330M or eq. (33 uH, Isat >= 1 A, 8x8 mm)')
+     {'1': 'SW5', '2': '+5V'}, MPN='Bourns SRN8040TA-330M, or YJYCOIN YNR8040-330M (LCSC C497847); 33 uH, Isat >= 1 A, 8x8 mm')
 R(S, '31.6k', '+5V', 'FB5')
 R(S, '10k', 'FB5', 'GND')
 R(S, '178k', 'SW5', 'RIP5')
@@ -187,7 +187,7 @@ S = 'bridge'
 # DC-link capacitance: 8 x 220 uF/100 V low-ESR (~17 A rms ripple at 35 A ->
 # ~2.1 A per cap) + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
 for i in range(8):
-    CP(S, '220u/100V', '+48V', 'GND', MPN='Panasonic EEU-FS2A221 or eq. low-ESR, >=2.1 A ripple')
+    CP(S, '220u/100V', '+48V', 'GND', MPN='Panasonic EEU-FS2A221 or Rubycon 100ZLH220MEFC12.5X25 (12.5x25 mm, 5 mm pitch, low-ESR); not stocked at LCSC: global sourcing or hand-solder')
 for i in range(6):
     C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
 
@@ -236,7 +236,7 @@ for ph in 'ABC':
 # Board-mounted NTC next to low-side FETs
 R(S, '10k', '+3V3', 'TEMP_FET')
 part(S, 'TH', 'Device:Thermistor_NTC', '10k B3435', 'Resistor_SMD:R_0603_1608Metric',
-     {'1': 'TEMP_FET', '2': 'GND'}, MPN='NCP18XH103F03RB')
+     {'1': 'TEMP_FET', '2': 'GND'}, MPN='Murata NCP18XH103F03RB (LCSC C13564)')
 C(S, '100n', 'TEMP_FET', 'GND')
 
 # ============================================================================

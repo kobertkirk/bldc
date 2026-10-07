@@ -278,13 +278,24 @@ real quote, because their prices change often.
 | 4-layer PCB 188 × 74 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
 | PCBA setup + stencil (economic) | ≈ $10 |
 | "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
-| SMT + through-hole joints (≈ 700 SMT + ≈ 60 THT per board) | ≈ $15 |
-| Components (BOM ≈ $32/board) | ≈ $160 |
-| Shipping (DHL / FedEx) | $20–35 |
-| **Total for 5** | **≈ $290–380, about $58–76 per board** |
+| SMT + through-hole joints (connectors only, see the caps below) | ≈ $12 |
+| Parts JLCPCB supplies from LCSC (≈ $26/board) | ≈ $130 |
+| JLCPCB shipping (DHL / FedEx) | $20–35 |
+| 40 × 220 µF/100 V caps bought separately (Digi-Key/Mouser, ≈ $1–1.20 each, incl. shipping) | $45–55 |
+| **Total for 5** | **≈ $330–390, about $66–78 per board** |
 
-- JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
-  2-board order is still about $200, so most of the cost of a small order is fees.
+Every part in the BOM has an LCSC part number or is a generic resistor/capacitor/diode/connector that LCSC stocks in
+quantity, **except the 220 µF/100 V bulk capacitors**. LCSC has almost no 12.5 mm, 100 V, low-ESR caps in stock
+(Panasonic EEU-FS2A221 C264064 and Rubycon 100ZLH220MEFCG412.5X25 C441624 both show 0–31 pcs). The other
+220 µF/100 V parts LCSC does stock are 16 mm wide or 2000 h general-purpose types that do not fit or cannot take the
+ripple. Buy the Panasonic EEU-FS2A221 (1.8 A ripple) or Rubycon 100ZLH220MEFC12.5X25 (1.62 A) from Digi-Key/Mouser
+and solder the 8 through-hole caps yourself, or add them through JLCPCB's global sourcing. Both are below the 2.1 A
+worst case (35 A battery at 50 % duty), but that rating is at 105 °C. Check the temperature multiplier in the
+datasheet for your ambient, or limit the battery current.
+
+The 33 µH inductor: use the Bourns SRN8040TA-330M if JLCPCB has it, otherwise the YJYCOIN YNR8040-330M (C497847),
+an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
+
 - The shunts are Bourns CSS4J-4026R-L500F (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal, 10.06 × 6.60 mm),
   which JLCPCB can place. The footprint is KiCad's `R_Shunt_Isabellenhuette_BVR4026`: Bourns' recommended land
   pattern has the same 10.6 mm span, 5.6 mm current pads and 0.9 mm sense pads, so the Isabellenhütte BVR 4026 also

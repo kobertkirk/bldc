@@ -18,10 +18,18 @@ HINTS = {
     ('C', '1u/25V'): 'X7R 0805 25V',
     ('C', '2.2n'): 'X7R 0603 50V (LM5164 BST)',
     ('R', '4R7'): '0603 1% (gate resistor)',
-    ('D', 'SMCJ60CA'): 'TVS 60V standoff, 1500W, SMC',
+    ('D', 'SMCJ60CA'): 'TVS 60V standoff, 1500W, SMC (Littelfuse, LCSC C151290)',
     ('D', 'ES1D'): '200V 1A ultrafast, SMA (bootstrap)',
     ('D', '1N4148W'): '100V signal diode SOD-123',
     ('D', 'BAT46W'): '100V Schottky SOD-123',
+    # specialised parts, with an LCSC / JLCPCB part number known to be stocked (Oct 2026)
+    ('Q', 'IPT015N10N5'): 'Infineon IPT015N10N5ATMA1 (LCSC C108964)',
+    ('U', 'LM5109BMA'): 'TI LM5109BMAX/NOPB (LCSC C116862)',
+    ('U', 'LM5164DDA'): 'TI LM5164DDAR (LCSC C477928)',
+    ('U', 'INA240A1D'): 'TI INA240A1DR (LCSC C2060769)',
+    ('U', 'STM32G431CBT6'): 'ST STM32G431CBT6 (LCSC C529355)',
+    ('U', 'AP2112K-3.3'): 'Diodes AP2112K-3.3TRG1 (LCSC C51118)',
+    ('D', 'ESDA6V1-5SC6'): 'ST ESDA6V1-5SC6 (LCSC C6650)',
 }
 
 
