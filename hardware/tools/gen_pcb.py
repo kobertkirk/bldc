@@ -8,7 +8,7 @@ each footprint is linked to its schematic symbol, so "Update PCB from
 Schematic" works afterwards without losing placement.  Tracks are not routed
 here: route_pcb.py routes this placement and adds planes/pours.
 
-Board plan, rev F (mm, origin top-left, top view), 90 x 64.5 mm:
+Board plan, rev F (mm, origin top-left, top view), 90 x 68.5 mm:
 
   x 0.5..62     power array: one 20.5 mm column per phase
                   +48 V bus along the top edge (high-side drain tabs)
@@ -19,10 +19,10 @@ Board plan, rev F (mm, origin top-left, top view), 90 x 64.5 mm:
                   on the left of each column carries the gate / sense traces
   x 62.5..69.5  battery wire pads (BAT+ top, BAT- bottom), TVS, two M3 holes
   x 70..89.5    three 18 x 35 mm bulk capacitors standing in a column
-  y 41.8..57.2  DRV8353RS (top) with its passives, the 5 V buck, the latch;
+  y 41.8..60.5  DRV8353RS (top) with its passives, the 5 V buck, the latch;
                 MCU, I/O conditioning and the LDO on the BOTTOM side here and
                 beside the bulk caps (the heat plate only covers the array)
-  y 57.6..64.5  JST-GH connector row along the bottom edge
+  y 61..68.5    JST-GH connector row along the bottom edge
 
 usage: gen_pcb.py  (needs `import pcbnew`, i.e. run with KiCad's python)
 """
@@ -37,7 +37,7 @@ from gen_schematic import KICAD_DIR, PROJECT_LIB, Libs, resolve_pins, uid  # noq
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 90.0, 64.5            # board size, mm (9.0 sq in)
+W, H = 90.0, 68.5            # board size, mm (9.6 sq in)
 GAP = 1.0                    # min spacing between packed courtyards
 
 # power-array geometry (shared with route_pcb.py)
@@ -59,8 +59,8 @@ TVS_POS = (BAT_X, 21.25)
 HOLES = [(BAT_X, 12.3), (BAT_X, 30.2), (3.6, H - 3.6), (W - 3.6, H - 3.6)]
 CAP_X = 79.75                # bulk capacitor centres (column of three)
 CAP_YS = (9.5, 28.5, 47.5)
-DRV_POS = (31.5, 49.5)
-BOTTOM = ('mcu', 'io', 'ldo')     # groups placed on the bottom side
+DRV_POS = (31.5, 51.0)
+BOTTOM = ('mcu', 'io')            # groups placed on the bottom side
 
 
 def col_x(ph):
@@ -152,7 +152,7 @@ def role_of(c, state):
             return 'latch'
         if lib == 'Device:LED' or 'PWR_LED_A' in pins:
             return 'leds'
-        return 'ldo'
+        return 'io'                           # LDO: bottom side with the I/O parts
     if s == 'mcu':
         if ref.startswith('J'):
             return 'conn'
@@ -169,19 +169,19 @@ def role_of(c, state):
 # Packing regions: list of (x0, y0, x1, y1) filled in order.  The DRV8353 sits
 # at DRV_POS; its passives pack in the ring around it.
 _DX, _DY = DRV_POS
+_K = 4.15 + 2.5              # DRV courtyard half-size + a fan-out ring for its 0.5 mm pins
+_YD = H - 8.0                # bottom of the DRV / supply area
 REGIONS = {
-    'latch': [(0.5, 41.8, 17.0, 56.6)],
-    'leds':  [(0.5, 41.8, 17.0, 56.6)],
-    'drv':   [(17.0, 41.8, 46.0, _DY - 4.4), (17.0, _DY - 4.4, _DX - 4.4, 56.6),
-              (_DX + 4.4, _DY - 4.4, 46.0, 56.6), (_DX - 4.4, _DY + 4.4, _DX + 4.4, 56.6)],
-    'buck':  [(46.0, 41.8, 69.6, 56.6)],
-    'conn':  [(7.4, 57.0, 82.6, 64.3)],
-    # bottom side (outside the heat-plate area)
-    'mcu':   [(17.0, 41.8, 62.0, 56.6)],
-    'ldo':   [(62.0, 42.0, 69.6, 56.6)],
-    'io':    [(0.5, 41.8, 17.0, 56.6), (70.6, 12.0, 89.5, 26.5), (70.6, 31.2, 89.5, 46.0)],
+    'latch': [(0.5, 41.8, 15.5, _YD)],
+    'drv':   [(15.5, 41.8, _DX - _K, _YD), (_DX + _K, 41.8, 47.5, _YD),
+              (_DX - _K, 41.8, _DX + _K, _DY - _K), (_DX - _K, _DY + _K, _DX + _K, _YD)],
+    'buck':  [(47.5, 41.8, 69.6, _YD)],
+    'conn':  [(7.4, H - 7.5, 82.6, H - 0.2)],
+    # bottom side (outside the heat-plate area), clear of the DRV fan-out
+    'mcu':   [(40.0, 41.8, 69.6, _YD)],
+    'io':    [(0.5, 41.8, _DX - _K - 1.0, _YD), (70.6, 12.0, 89.5, 26.5), (70.6, 31.2, 89.5, 46.0)],
 }
-GROUP_GAP = {'conn': 0.6}
+GROUP_GAP = {'conn': 0.6, 'drv': 1.3}
 
 
 def _skyline_fit(sky, x0, x1, y1, w, h):
@@ -386,8 +386,7 @@ def main():
         fp.SetPosition(mm(*pos))
     # latch and LEDs share a region: pack them as one group
     groups['latch'] = groups.get('latch', []) + groups.pop('leds', [])
-    # 'io' and 'ldo' share a bottom region: ldo first, io fills the rest
-    for g in ['latch', 'drv', 'buck', 'conn', 'mcu', 'ldo', 'io']:
+    for g in ['latch', 'drv', 'buck', 'conn', 'mcu', 'io']:
         items = groups.pop(g, [])
         items.sort(key=lambda it: (-round(it[1][1], 1), -it[1][0]))   # tallest first: tighter rows
         regions = REGIONS[g]

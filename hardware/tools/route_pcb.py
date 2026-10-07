@@ -463,6 +463,62 @@ def _shapes(a, b):
             [a, (ax + sx * m, ay + sy * m), b], [a, (bx - sx * m, by - sy * m), b]]
 
 
+def _pour_joined(net, locs):
+    """Connections the outer pours make: the low-side source nets, and a motor
+    wire pad on its switch node."""
+    return net.startswith('LS_') or (net.startswith('SW_') and any(' of J' in d for _, _, d in locs))
+
+
+def _add_items(board, net, items):
+    ni = board.FindNet(net)
+    layer = {'F': pcbnew.F_Cu, '1': pcbnew.In1_Cu, '2': pcbnew.In2_Cu, 'B': pcbnew.B_Cu}
+    for kind, data in items:
+        if kind == 'V':
+            v = pcbnew.PCB_VIA(board)
+            v.SetPosition(mm(*data))
+            v.SetWidth(pcbnew.FromMM(0.6))
+            v.SetDrill(pcbnew.FromMM(0.3))
+            v.SetNet(ni)
+            board.Add(v)
+            continue
+        for a, b in zip(data, data[1:]):
+            t = pcbnew.PCB_TRACK(board)
+            t.SetStart(mm(*a))
+            t.SetEnd(mm(*b))
+            t.SetWidth(pcbnew.FromMM(0.25))
+            t.SetLayer(layer[kind])
+            t.SetNet(ni)
+            board.Add(t)
+
+
+def grid_finish(board):
+    """Route what is still open with the 4-layer grid router (astar_route.py):
+    first kept off the power array's outer layers, then without that fence for
+    nets that live inside it (gate drive, sense).  Deterministic, so a rebuild
+    from the same SES gives the same board."""
+    import astar_route
+    items, _ = drc(board)
+    done = 0
+    for t, locs in [it for it in items if it[0] == 'unconnected_items']:
+        if len(locs) < 2:
+            continue
+        net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
+        if _pour_joined(net, locs):
+            continue
+        a, b = locs[0][:2], locs[1][:2]
+        for fence in (True, False):
+            try:
+                g, path = astar_route.route(board, net, a, b, fence=fence)
+            except SystemExit:
+                continue
+            _add_items(board, net, astar_route.to_hand_route(g, path, a, b))
+            done += 1
+            break
+        else:
+            print(f'  grid router found no path for {net}')
+    return done
+
+
 def auto_repair(board, max_tries=400):
     """Close connections the router left open: try short F/B routes (direct,
     L, 45-degree, or via-to-the-other-layer) and keep the first that DRC
@@ -474,7 +530,7 @@ def auto_repair(board, max_tries=400):
         if len(locs) < 2:
             continue
         net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
-        if net.startswith(('LS_', 'SW_')):   # joined by the pours added afterwards
+        if _pour_joined(net, locs):           # made by the pours added afterwards
             continue
         ni = board.FindNet(net)
         ea, eb = _endpoints(board, *locs[0]), _endpoints(board, *locs[1])
@@ -671,6 +727,7 @@ def main():
     print(f'added {hand_routes(board, ses)} hand route(s)')
     print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
     print(f'auto-repaired {auto_repair(board)} open connection(s)')
+    print(f'grid-routed {grid_finish(board)} more')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
     outer_pours(board)
