@@ -12,7 +12,7 @@ Board plan (mm, origin top-left, power flows left -> right -> down):
 
   x 0..17     battery strip: BAT+ / BAT- M5 bolt terminals on the left edge,
               26 mm apart, TVS between them, bus-voltage divider below
-  x 17..131   bulk capacitors along the top edge, then one 38 mm column per
+  x 17..131   four 18 mm bulk capacitors along the top edge, then one 38 mm column per
               phase:  [gate driver | high FET over low FET | Kelvin shunt]
               - both FETs drain-tab up: the switch node is the short gap
                 between the high-side source leads and the low-side tab
@@ -34,18 +34,19 @@ from gen_schematic import Libs, resolve_pins, uid  # noqa: E402
 
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 185.0, 66.0           # board size, mm
+W, H = 180.0, 69.5           # board size, mm
 GAP = 1.5                    # min spacing between packed courtyards (room for fan-out vias)
 
 # power-stage geometry (shared with route_pcb.py)
 COL0, COLW = 17.0, 38.0      # first phase column x, column pitch
 POWER_X = COL0 + 3 * COLW    # 131: power stage left of this, controller right
-Y_HI, Y_LO = 25.0, 40.0      # FET centres (switch-node gap between them)
+Y_HI, Y_LO = 28.5, 43.5      # FET centres (switch-node gap between them)
 Y_DRV = (Y_HI + Y_LO) / 2    # gate driver centre
-Y_SHUNT = 33.0
-Y_INA = 46.0
-Y_CER = 52.5                 # DC-link ceramics under the low-side sources
-Y_TERM = 55.5                # motor terminal centres, level with the ceramics
+Y_SHUNT = 36.5
+Y_INA = 49.5
+Y_CER = 56.0                 # DC-link ceramics under the low-side sources
+Y_TERM = 59.0                # motor terminal centres, level with the ceramics
+Y_BULK = 11.0                # centre line of the four 18 mm bulk capacitors
 # x offsets inside a phase column
 DRV_X, FET_X, SHUNT_X, INA_X, TERM_X, CER_DX = 5.5, 16.5, 28.0, 26.0, 32.5, 3.4
 BAT_POS = {'BAT+': (9.5, 12.5), 'BAT-': (9.5, 38.5)}
@@ -158,20 +159,20 @@ def role_of(c, ina_caps):
 LX = POWER_X + 1.5            # controller area: two sub-columns
 LM = LX + 24.0
 REGIONS = {
-    'bulk':      [(COL0, 1.5, POWER_X + 1.0, 16.5)],
     'bus_sense': [(0.5, 45, 16.5, 57.5), (8.0, 57.5, 16.5, H - 0.8)],
     'buck12':    [(LX, 1.5, LM, 18.0)],
     'buck5':     [(LX, 18.5, LM, 36.5)],
     'ldo':       [(LX, 37, LM, 46.5)],
-    'latch':     [(LX, 47, LM, H - 0.8)],
-    'mcu':       [(LM + 0.5, 1.5, W - 8, 19.5), (W - 8, 8, W - 0.5, 19.5)],
-    'io':        [(LM + 0.5, 20, W - 0.5, 37.5)],
-    'conn':      [(LM + 0.5, 38, W - 0.5, H - 8.0), (LM + 0.5, H - 8.0, W - 8, H - 0.5)],
+    'latch':     [(LX, 47, LM, H - 8.5)],
+    'mcu':       [(LM + 0.5, 1.5, W - 8, 21.0), (W - 8, 8, W - 0.5, 21.0)],
+    'io':        [(LM + 0.5, 21.5, W - 0.5, 41.0)],
+    'conn':      [(LM + 0.5, 41.5, W - 0.5, H - 8.0), (LM + 0.5, H - 8.0, W - 8, H - 0.5),
+                  (LX, H - 8.0, LM, H - 0.5)],
 }
-GROUP_GAP = {'bulk': 1.0}
+GROUP_GAP = {}
 for _ph in 'ABC':
     _x = col_x(_ph)
-    REGIONS[f'drv{_ph}'] = [(_x + 0.3, 17, _x + 10.8, Y_DRV - 2.9), (_x + 0.3, Y_DRV + 2.9, _x + 10.8, H - 1)]
+    REGIONS[f'drv{_ph}'] = [(_x + 0.3, Y_HI - 8.0, _x + 10.8, Y_DRV - 2.9), (_x + 0.3, Y_DRV + 2.9, _x + 10.8, H - 1)]
     REGIONS[f'sense{_ph}'] = [(_x + 21.8, Y_INA + 3.0, _x + 26.8, Y_CER + 6.0)]
 
 
@@ -251,6 +252,10 @@ def place_power(groups):
     groups.pop('batterm')
     put(one('tvs'), *TVS_POS, pad='1', direction='up')    # +48V end towards BAT+
     ceramics = [f for f, _ in groups.pop('ceramic')]
+    bulk = [f for f, _ in groups.pop('bulk')]
+    for k, fp in enumerate(bulk):                    # spread evenly over the three bridges
+        c = COL0 + 3 * COLW * (k + 0.5) / len(bulk)
+        put(fp, c - 3.75, Y_BULK, pad='2', direction='right')   # pad 1 at the origin, 7.5 mm pitch
     for ph in 'ABC':
         x = col_x(ph)
         xf = x + FET_X
@@ -358,7 +363,7 @@ def main():
     for g, items in groups.items():
         if g.startswith(('drv', 'sense')):
             items.sort(key=lambda it: -(it[1][0] * it[1][1]))     # biggest first
-        elif g != 'bulk':
+        else:
             items.sort(key=lambda it: (-round(it[1][1], 1), -it[1][0]))   # tallest first: tighter rows
         pack(items, REGIONS[g], GROUP_GAP.get(g, GAP))
 
@@ -380,7 +385,7 @@ def main():
     board.Add(rect)
 
     # silkscreen: polarity and phase labels next to the terminals
-    labels = [('48V 35A BLDC  rev D', LX + 12, H - 1.5, 1.0),
+    labels = [('48V 35A BLDC  rev E', COL0 + 14, H - 1.5, 1.0),
               ('BAT+', BAT_POS['BAT+'][0] + 2.5, BAT_POS['BAT+'][1] - 7.4, 1.5),   # above: TVS below
               ('BAT-', BAT_POS['BAT-'][0] + 0.5, BAT_POS['BAT-'][1] - 6.9, 1.5)]
     labels += [(f'MOTOR {ph}', col_x(ph) + TERM_X, Y_TERM + 7.3, 1.2) for ph in 'ABC']

@@ -290,7 +290,18 @@ def fill(board):
 # Each is only added if no track of the net already reaches the pad, and was
 # verified with a full zone refill + DRC (0 violations).
 #   (net, (ref, pad), [segments]); segment = ('F'|'B', [points]) or ('V', point)
+# nets whose Freerouting wiring is thrown away on import (bad detours), re-made by HAND_ROUTES
+RIP_UP = {          # {sha1 of the SES file: {net, ...}}
+    '604e5ab3ee39b391a8f89548bc6738a9e444be09': {'GL_C'},    # 139 mm loop for a gate drive
+}
+
 HAND_ROUTES = {     # {sha1 of the SES file: [routes]}, filled per routing session
+    # rev E: the INA240 C supply tap the router left open (astar_route.py)
+    '604e5ab3ee39b391a8f89548bc6738a9e444be09': [
+        ('+3V3', None, [('F', [(121.475, 48.865), (120.75, 50.4)]), ('V', (120.75, 50.4)),
+                        ('B', [(120.75, 50.4), (119.75, 53.4), (119.25, 62.4), (118.5, 63.4), (118.5, 64.4),
+                               (127.75, 65.65), (133.25, 64.9)]), ('V', (133.25, 64.9))]),   # via into In2 +3V3
+    ],
     # rev C: LATCH_B (Q1 base) is boxed in by inner-layer tracks; go over Q1 pin 3 on F.Cu
     '3ea9f4de44a089cb82b0a6ff3ac9a04d7fcae6f2': [
         ('LATCH_B', ('Q1', '1'), [('F', [(137.73, 55.0), (138.3, 54.4), (141.25, 54.4), (141.25, 59.88)])]),
@@ -330,7 +341,8 @@ def hand_routes(board, ses_path):
                     t.SetStart(mm(*a))
                     t.SetEnd(mm(*b))
                     t.SetWidth(pcbnew.FromMM(0.25))
-                    t.SetLayer(pcbnew.F_Cu if kind == 'F' else pcbnew.B_Cu)
+                    t.SetLayer({'F': pcbnew.F_Cu, '1': pcbnew.In1_Cu, '2': pcbnew.In2_Cu,
+                                'B': pcbnew.B_Cu}[kind])
                     t.SetNet(ni)
                     board.Add(t)
         added += 1
@@ -522,6 +534,8 @@ def auto_repair(board, max_tries=400):
 
 
 def import_ses(board, ses_path):
+    import hashlib
+    rip = RIP_UP.get(hashlib.sha1(open(ses_path, 'rb').read()).hexdigest(), set())
     root = parse(open(ses_path).read())
     routes = find1(root, 'routes')
     res = find1(routes, 'resolution')
@@ -552,6 +566,9 @@ def import_ses(board, ses_path):
         return v
 
     for net in find(find1(routes, 'network_out'), 'net'):
+        if net[1] in rip:
+            print(f'ripped up the router wiring of {net[1]}')
+            continue
         ni = board.FindNet(net[1])
         ends = {}                                  # point -> set of layers
         for wire in find(net, 'wire'):

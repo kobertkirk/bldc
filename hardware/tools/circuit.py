@@ -184,10 +184,12 @@ for net in ['+48V', 'GND', '+12V', '+5V']:
 # ============================================================================
 S = 'bridge'
 
-# DC-link capacitance: 8 x 220 uF/100 V low-ESR (~17 A rms ripple at 35 A ->
-# ~2.1 A per cap) + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
-for i in range(8):
-    CP(S, '220u/100V', '+48V', 'GND', MPN='Aishi ERS1KM221W25OT (LCSC C106684), 12.5x25 mm, 5 mm pitch; alt. Panasonic EEU-FS2A221')
+# DC-link capacitance: 4 x 1000 uF/100 V, one large can over each 28.5 mm of the
+# bridge row (~4.3 A rms each at the ~17 A worst case at 35 A battery current),
+# + 6 x 2.2 uF/100 V X7R right at the low-side FET sources
+for i in range(4):
+    CP(S, '1000u/100V', '+48V', 'GND', fp='Capacitor_THT:CP_Radial_D18.0mm_P7.50mm',
+       MPN='Aishi ERS1KM102M35OT (LCSC C724666), 18x35 mm, 7.5 mm pitch, 105 C 10000 h')
 for i in range(6):
     C(S, '2.2u/100V', '+48V', 'GND', fp=FP_C1210)
 

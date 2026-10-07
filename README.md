@@ -26,7 +26,7 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The 185 × 66 mm 4-layer PCB (rev D) is **fully routed and passes KiCad DRC with
+> [Verification](#verification)). The 180 × 69.5 mm 4-layer PCB (rev E) is **fully routed and passes KiCad DRC with
 > 0 violations and 0 unconnected pads**. The power stage is placed by hand (see [Board](#board)); the signal routing
 > was done by an autorouter (Freerouting) plus scripted copper pours, so have it reviewed before ordering.
 > The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
@@ -220,7 +220,10 @@ files directly.
 - routes the signals with Freerouting (headless, under `xvfb-run`)
 - imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself,
   restores any layer-change vias the router left out, adds the recorded hand routes in `HAND_ROUTES`, then tries
-  short DRC-checked candidate routes for anything still open)
+  short DRC-checked candidate routes for anything still open; `RIP_UP` throws away a router detour, e.g. a gate
+  drive looped across the board, so it can be re-made locally)
+- `astar_route.py` is a small 4-layer grid router that finds the recorded routes for connections Freerouting
+  leaves open, keeping clear of the power copper
 - adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads
 - fills the zones and writes a DRC report
 
@@ -249,28 +252,35 @@ Terminals close-up: ![terminals](hardware/renders/bldc48-terminals.png)
 
 Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
 In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. The inner
-planes are unbroken under the FETs, DC-link caps and shunts. 1778 track segments, 459 vias, of which 304 are arrays
+planes are unbroken under the FETs, DC-link caps and shunts. 1734 track segments, 454 vias, of which 304 are arrays
 in the FET, shunt and DC-link capacitor pads tying the outer pours and the planes together.
 
-## Rev D: compact layout
+## Rev E: compact layout, four large bulk capacitors
 
-Rev D has the same circuit as rev B on a much smaller board: **185 × 66 mm**, against 240 × 100 mm for rev B
-(49 % less area) and 188 × 74 mm for rev C (12 % less).
+Rev E has the same circuit as rev B on a much smaller board: **180 × 69.5 mm**, against 240 × 100 mm for rev B
+(48 % less area).
+- The DC link is **4 × 1000 µF / 100 V** (Aishi ERS1KM102M35OT, 18 × 35 mm), one can over each 28.5 mm of the bridge
+  row, instead of 8 × 220 µF.
+  - That is 4000 µF instead of 1760 µF, with half the parts and through-hole joints.
+  - A large can carries more ripple current than a small one, so 4 large cans carry more in total than 8 small ones.
+  - The cans are 35 mm tall. The 18 mm cap row makes the board 3.5 mm taller than rev D (185 × 66 mm) but 5 mm
+    narrower, so the area is about the same.
 - The three half-bridge columns are 38 mm wide (rev B: 50 mm). The gate driver, shunt and INA240 of each phase pack
   around its FET pair.
 - Each motor terminal sits straight below its shunt, level with the DC-link ceramics, instead of at the bottom edge.
   A 5 mm routing channel for the controller signals runs underneath.
 - The battery strip is 17 mm wide. BAT+ and BAT− are 26 mm apart with the TVS between them.
-- The 220 µF caps sit in one row along the top edge, right on the +48 V pour.
 - The buck inductors are 8 × 8 mm Bourns SRN8040TA instead of 12 × 12 mm SRR1260. The 12 V and 5 V loads are only
   a few hundred mA, so the smaller parts still have plenty of saturation margin.
-- The logic, supplies and connectors fill a 52 mm strip on the right. A skyline packer (with 90° rotation of small
-  parts) fills it far more tightly than the earlier row packer.
+- The logic, supplies and connectors fill a 47.5 mm strip on the right. Two of the 2-pin connectors sit on the bottom
+  edge below the supplies. A skyline packer (with 90° rotation of small parts) fills this strip much more tightly than
+  the earlier row packer.
 
 Each phase output is a 7.3 mm pour on both outer layers (2 oz), about 20 mm from shunt to terminal. By IPC-2221 that
 carries about 55 A at a 30 °C rise, which covers the 60 A peak / ≈ 42 A rms phase limit. Outer-layer rule areas keep
 every signal track off these strips. In rev C, signals crossed the phase B and C strips and cut the pour on one layer,
-so only one layer carried the motor current there. Keep the 2 oz outer copper and the heat-spreader plate.
+so only one layer carried the motor current there. Every switch-node and phase pour was checked to be one unbroken
+piece on both layers. Keep the 2 oz outer copper and the heat-spreader plate.
 
 ## Ordering from JLCPCB (rough cost)
 
@@ -279,23 +289,26 @@ real quote, because their prices change often.
 
 | Item (order of 5 assembled boards) | Approx. |
 |---|---|
-| 4-layer PCB 185 × 66 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
+| 4-layer PCB 180 × 69.5 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
 | PCBA setup + stencil (economic) | ≈ $10 |
 | "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
-| SMT + through-hole joints (≈ 700 SMT + ≈ 45 THT per board) | ≈ $13 |
-| Parts (≈ $27/board, all from LCSC) | ≈ $135 |
+| SMT + through-hole joints (≈ 690 SMT + ≈ 37 THT per board) | ≈ $13 |
+| Parts (≈ $28/board, all from LCSC) | ≈ $140 |
 | Shipping (DHL / FedEx) | $20–35 |
-| **Total for 5** | **≈ $295–340, about $59–68 per board** |
+| **Total for 5** | **≈ $300–345, about $60–69 per board** |
 
 Every part in the BOM has an LCSC part number or is a generic resistor/capacitor/diode/connector that LCSC stocks in
 quantity, so JLCPCB can build the whole board.
-- The bulk capacitors are Aishi ERS1KM221W25OT (C106684): 220 µF/100 V, 12.5 × 25 mm, 10 000 h at 105 °C, same
-  footprint. The Panasonic EEU-FS2A221 and Rubycon 100ZLH220MEFC12.5X25 are better parts (1.8 A / 1.62 A ripple),
-  but LCSC has almost none in stock.
-- I could not read Aishi's ripple rating, because the datasheet was not reachable from here. A smaller part in the
-  same series (100 µF, 10 × 13 mm) is rated 0.75 A, so expect about 1.5 A for this size.
-- Worst-case ripple is 2.1 A per cap (35 A battery at 50 % duty). Check the datasheet. If the caps run hot at full
-  power, swap in the Panasonic/Rubycon parts (hand-solder or global sourcing) or lower `i_batt_max`.
+- The bulk capacitors are Aishi ERS1KM102M35OT (C724666): 1000 µF/100 V, 18 × 35 mm, 7.5 mm pitch, 10 000 h at
+  105 °C. Aishi's "1K" voltage code is 100 V in its own scheme ("1B" is 80 V), and LCSC lists the part as 100 V.
+- I could not read the ripple rating, because the datasheet was not reachable from here. Same-series 1000 µF parts at
+  50–63 V are rated about 1.8–2.6 A at 120 Hz, and an electrolytic carries roughly 1.4–1.7× that at 20 kHz, so expect
+  roughly 3 A per can (about 12 A for four).
+- Simple estimate: about 17 A rms total at 35 A battery current, 50 % duty. At low speed with the full 60 A phase
+  current the three-phase worst case reaches about 27 A rms (for a short time, like a hill start).
+- Electrolytics take short overloads well, but check the datasheet. If the cans run hot in sustained hard use, lower
+  `i_phase_max` / `i_batt_max`, or use Panasonic EEU-FC2A102 / Nichicon UHE2A102 parts (hand-solder or global
+  sourcing).
 
 The 33 µH inductor: use the Bourns SRN8040TA-330M if JLCPCB has it, otherwise the YJYCOIN YNR8040-330M (C497847),
 an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
@@ -306,12 +319,12 @@ an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
   fits as a drop-in alternative. Check the pad drawing against the Bourns datasheet before ordering. Avoid 3 % parts such as
   the Milliohm HOVB4026-5W-0.5mR-3%: they add up to 3 % gain error to every current reading.
 - Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
-  220 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
+  1000 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
 - Set the stackup to 2 oz outer copper. JLCPCB's cheap 4-layer offer is 1 oz.
 - JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
   2-board order is still about $190, so most of the cost of a small order is fees.
-- Board size: 185 × 66 mm (7.3 × 2.6 in), 1.6 mm thick. The 220 µF caps are the tallest parts, so the assembled
-  board is about 27 mm tall. Four M3 mounting holes sit 4 mm in from each corner (177 × 58 mm hole spacing).
+- Board size: 180 × 69.5 mm (7.1 × 2.7 in), 1.6 mm thick. The 1000 µF caps are the tallest parts, so the assembled
+  board is about 37 mm tall. Four M3 mounting holes sit 4 mm in from each corner (172 × 61.5 mm hole spacing).
 
 ## Design review (rev B)
 
@@ -340,7 +353,7 @@ simulation passes on two motors including the new overcurrent test.
 * Use 4 layers with 2 oz outer copper. Run 35 A battery and phase paths as wide pours on two or more layers,
   stitched with many vias. The phase pours are 7.3 mm wide on both outer layers, kept free of signal tracks by
   rule areas. Do not narrow them further.
-* Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. Put the 220 µF caps right
+* Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. Put the bulk caps right
   next to the bridges.
 * Give the FET drain/source pads thermal-via arrays down to a bottom pour. Bolt the board to an aluminium plate or the
   case through a thermal pad. At 35 A, expect roughly 6–10 W of losses at full load.
@@ -354,6 +367,7 @@ simulation passes on two motors including the new overcurrent test.
 
 * The LM5164 ripple-injection and inductor values were chosen with the datasheet formulas but not run through TI
   WEBENCH.
-* The bulk capacitor ripple rating: ≈ 17 A rms total at 35 A means about 2.1 A per cap for 8 caps. Use high-ripple
-  parts, or add caps.
+* The bulk capacitor ripple rating. At 35 A the caps carry about 17 A rms in total, roughly 4.3 A per can for four.
+  The three-phase worst case at full phase current and low speed is ≈ 27 A rms for short periods. Check the
+  ERS1KM102M35OT datasheet (about 3 A per can expected), and watch can temperature in sustained hard use.
 * Choose `v_uv_*` for your pack. The defaults are for 13S.
