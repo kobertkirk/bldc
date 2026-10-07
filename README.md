@@ -26,7 +26,7 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The 240 × 100 mm 4-layer PCB (rev B) is **fully routed and passes KiCad DRC with
+> [Verification](#verification)). The 188 × 74 mm 4-layer PCB (rev C) is **fully routed and passes KiCad DRC with
 > 0 violations and 0 unconnected pads**. The power stage is placed by hand (see [Board](#board)); the signal routing
 > was done by an autorouter (Freerouting) plus scripted copper pours, so have it reviewed before ordering.
 > The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
@@ -219,8 +219,8 @@ files directly.
 - keeps tracks off the inner layers under the FETs, DC-link caps and shunts (rule area)
 - routes the signals with Freerouting (headless, under `xvfb-run`)
 - imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself,
-  restores any layer-change vias the router left out, and adds one recorded hand route for the connection the
-  router leaves open)
+  restores any layer-change vias the router left out, adds the recorded hand routes in `HAND_ROUTES`, then tries
+  short DRC-checked candidate routes for anything still open)
 - adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads
 - fills the zones and writes a DRC report
 
@@ -249,8 +249,47 @@ Terminals close-up: ![terminals](hardware/renders/bldc48-terminals.png)
 
 Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
 In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. The inner
-planes are unbroken under the FETs, DC-link caps and shunts. 1627 track segments, 443 vias, of which 304 are arrays
+planes are unbroken under the FETs, DC-link caps and shunts. 1776 track segments, 453 vias, of which 304 are arrays
 in the FET, shunt and DC-link capacitor pads tying the outer pours and the planes together.
+
+## Rev C: compact layout
+
+Rev C has the same circuit as rev B on a smaller board: **188 × 74 mm instead of 240 × 100 mm (42 % less area)**.
+- The three half-bridge columns are 38 mm wide instead of 50 mm, and the gate driver, shunt and INA240 of each phase
+  pack around its FET pair.
+- The 220 µF caps sit in one row along the top edge, right on the +48 V pour.
+- The buck inductors are 8 × 8 mm Bourns SRN8040TA instead of 12 × 12 mm SRR1260. The 12 V and 5 V loads are only
+  a few hundred mA, so the smaller parts still have plenty of saturation margin.
+- The logic, supplies and connectors fill a 52 mm strip on the right.
+- The M5 battery and motor terminals keep their positions relative to the bridges: battery on the left edge, each
+  motor terminal straight below its shunt.
+
+The price of the smaller board is less copper. Each phase output is a 7.3 mm pour on both outer layers (2 oz), about
+35 mm long. By IPC-2221 that carries about 55 A at a 30 °C rise, which covers the 60 A peak / ≈ 42 A rms phase limit,
+but with less margin than rev B. Keep the 2 oz outer copper and the heat-spreader plate.
+
+## Ordering from JLCPCB (rough cost)
+
+These are estimates from JLCPCB's published pricing and LCSC part prices in October 2026. Upload the files to get a
+real quote, because their prices change often.
+
+| Item (order of 5 assembled boards) | Approx. |
+|---|---|
+| 4-layer PCB 188 × 74 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
+| PCBA setup + stencil (economic) | ≈ $10 |
+| "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
+| SMT + through-hole joints (≈ 700 SMT + ≈ 60 THT per board) | ≈ $15 |
+| Components (BOM ≈ $40/board) | ≈ $200 |
+| Shipping (DHL / FedEx) | $20–35 |
+| **Total for 5** | **≈ $330–420, about $65–85 per board** |
+
+- JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
+  2-board order is still about $200, so most of the cost of a small order is fees.
+- LCSC (JLCPCB's parts store) does not stock the Isabellenhütte BVR 4026 shunts (≈ $3.50 each from Bürklin or RS).
+  Order them through JLCPCB's global sourcing, or solder the three shunts yourself.
+- Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
+  220 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
+- Set the stackup to 2 oz outer copper. JLCPCB's cheap 4-layer offer is 1 oz.
 
 ## Design review (rev B)
 
@@ -276,8 +315,8 @@ simulation passes on two motors including the new overcurrent test.
 
 ## PCB layout rules
 
-* Use 4 layers with 2 oz outer copper. Run 35 A battery and phase paths as pours ≥ 10 mm wide on two or more layers,
-  stitched with many vias.
+* Use 4 layers with 2 oz outer copper. Run 35 A battery and phase paths as wide pours on two or more layers,
+  stitched with many vias. Rev C's phase pours are 7.3 mm wide on both outer layers. Do not narrow them further.
 * Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. Put the 220 µF caps right
   next to the bridges.
 * Give the FET drain/source pads thermal-via arrays down to a bottom pour. Bolt the board to an aluminium plate or the

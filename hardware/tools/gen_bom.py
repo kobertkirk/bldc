@@ -22,8 +22,6 @@ HINTS = {
     ('D', 'ES1D'): '200V 1A ultrafast, SMA (bootstrap)',
     ('D', '1N4148W'): '100V signal diode SOD-123',
     ('D', 'BAT46W'): '100V Schottky SOD-123',
-    ('L', '68u'): 'Bourns SRR1260-680M',
-    ('L', '33u'): 'Bourns SRR1260-330M',
 }
 
 

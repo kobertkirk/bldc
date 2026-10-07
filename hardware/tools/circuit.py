@@ -135,8 +135,9 @@ part(S, 'U', 'Regulator_Switching:LM5164DDA', 'LM5164DDA',
       'EP': 'GND', 'BST': 'BST12', 'SW': 'SW12', 'FB': 'FB12', 'PGOOD': None})
 R(S, '100k', 'RON12', 'GND')
 C(S, '2.2n', 'BST12', 'SW12')
-part(S, 'L', 'Device:L', '68u', 'Inductor_SMD:L_Bourns_SRR1260',
-     {'1': 'SW12', '2': '+12V'}, MPN='SRR1260-680M')
+# 12 V load is ~0.1 A (gate drive): peak = load + ripple/2 = ~0.35 A
+part(S, 'L', 'Device:L', '68u', 'Inductor_SMD:L_Bourns_SRN8040TA',
+     {'1': 'SW12', '2': '+12V'}, MPN='Bourns SRN8040TA-680M or eq. (68 uH, Isat >= 0.8 A, 8x8 mm)')
 R(S, '90.9k', '+12V', 'FB12')
 R(S, '10k', 'FB12', 'GND')
 # Type-3 ripple injection: RA = (Vin-Vout)*ton/(25mV*CA)
@@ -156,8 +157,8 @@ part(S, 'U', 'Regulator_Switching:LM5164DDA', 'LM5164DDA',
       'EP': 'GND', 'BST': 'BST5', 'SW': 'SW5', 'FB': 'FB5', 'PGOOD': None})
 R(S, '41.2k', 'RON5', 'GND')
 C(S, '2.2n', 'BST5', 'SW5')
-part(S, 'L', 'Device:L', '33u', 'Inductor_SMD:L_Bourns_SRR1260',
-     {'1': 'SW5', '2': '+5V'}, MPN='SRR1260-330M')
+part(S, 'L', 'Device:L', '33u', 'Inductor_SMD:L_Bourns_SRN8040TA',
+     {'1': 'SW5', '2': '+5V'}, MPN='Bourns SRN8040TA-330M or eq. (33 uH, Isat >= 1 A, 8x8 mm)')
 R(S, '31.6k', '+5V', 'FB5')
 R(S, '10k', 'FB5', 'GND')
 R(S, '178k', 'SW5', 'RIP5')

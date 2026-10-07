@@ -17,6 +17,7 @@ Autoroute bldc48.kicad_pcb with Freerouting and add the high-current copper.
 usage: route_pcb.py --freerouting /path/freerouting.jar [--passes 40]
 """
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -33,9 +34,11 @@ import gen_pcb  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PCB = os.path.join(HERE, '..', 'kicad', 'bldc48.kicad_pcb')
-from gen_pcb import COLW, POWER_X, H, W, Y_HI, Y_LO, col_x  # noqa: E402  (board geometry)
+from gen_pcb import (COLW, FET_X, H, POWER_X, SHUNT_X, TVS_POS, W, Y_CER, Y_HI, Y_LO,  # noqa: E402
+                     col_x)  # board geometry
 
 KEEPOUT_Y = Y_LO + 23.0     # inner-layer track keepout ends below the shunts/INA240s
+COL0_STRIP = 19.5           # right edge of the battery-terminal strip
 
 
 def mm(x, y):
@@ -92,6 +95,43 @@ def plane_keepout(board):
     board.Add(z)
 
 
+def four_layers():
+    ls = pcbnew.LSET()
+    for layer in (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu):
+        ls.AddLayer(layer)
+    return ls
+
+
+def edge_keepout(board, margin=1.0):
+    """Freerouting does not know KiCad's board-edge clearance: keep tracks 1 mm
+    in.  Four strips, because a ring (outline with a hole) loses its hole in
+    the Specctra export and would block the whole board."""
+    for x0, y0, x1, y1 in ((0, 0, W, margin), (0, H - margin, W, H),
+                           (0, 0, margin, H), (W - margin, 0, W, H)):
+        z = pcbnew.ZONE(board)
+        z.SetIsRuleArea(True)
+        z.SetDoNotAllowTracks(True)
+        z.SetDoNotAllowVias(True)
+        z.SetDoNotAllowPads(False)
+        z.SetDoNotAllowCopperPour(False)
+        z.SetDoNotAllowFootprints(False)
+        z.SetLayerSet(four_layers())
+        z.SetZoneName('board-edge track keepout')
+        o = z.Outline()
+        o.NewOutline()
+        for x, y in rect(x0, y0, x1, y1):
+            o.Append(pcbnew.FromMM(x), pcbnew.FromMM(y))
+        board.Add(z)
+
+
+def patch_dsn(path, clearance_um=210):
+    """Give the router a little clearance margin over KiCad's 0.2 mm rule
+    (Specctra coordinates are rounded on the way back)."""
+    txt = open(path).read()
+    txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
+    open(path, 'w').write(txt)
+
+
 def inner_planes(board):
     # solid pad connections: the M5 power terminals and FET via arrays must not
     # be throttled by thermal spokes
@@ -115,15 +155,18 @@ def outer_pours(board, hv_clear=0.5):
     for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
         for ph in 'ABC':
             x = col_x(ph)
-            add_zone(board, f'SW_{ph}', layer, rect(x + 14.5, Y_HI + 3.0, x + 33.0, Y_LO + 2.0),
+            add_zone(board, f'SW_{ph}', layer,
+                     rect(x + FET_X - 5.3, Y_HI + 3.0, x + SHUNT_X - 2.4, Y_LO + 2.0),
                      priority=5, clearance=hv_clear, solid=True)
-            add_zone(board, f'PHASE_{ph}', layer, rect(x + 36.2, Y_HI + 3.5, x + COLW - 0.4, H - 0.6),
+            add_zone(board, f'PHASE_{ph}', layer,
+                     rect(x + SHUNT_X + 2.3, Y_HI + 3.5, x + COLW - 0.4, H - 0.6),
                      priority=5, clearance=hv_clear, solid=True)
-            add_zone(board, 'GND', layer, rect(x + 13.5, Y_LO + 3.3, x + 27.0, Y_LO + 16.0),
+            add_zone(board, 'GND', layer,
+                     rect(x + FET_X - 5.5, Y_LO + 3.3, x + FET_X + 5.5, Y_CER + 3.5),
                      priority=4, solid=True)
         add_zone(board, '+48V', layer, rect(0.6, 0.6, POWER_X - 0.5, Y_HI + 2.3),
                  priority=3, clearance=hv_clear, solid=True)
-        add_zone(board, '+48V', layer, rect(0.6, 0.6, 21.0, 30.5),
+        add_zone(board, '+48V', layer, rect(0.6, 0.6, COL0_STRIP, TVS_POS[1] - 1.5),
                  priority=3, clearance=hv_clear, solid=True)
         add_zone(board, 'GND', layer, rect(0.5, 0.5, W - 0.5, H - 0.5), priority=1, solid=True)
 
@@ -212,18 +255,19 @@ def fill(board):
 # Each is only added if no track of the net already reaches the pad, and was
 # verified with a full zone refill + DRC (0 violations).
 #   (net, (ref, pad), [segments]); segment = ('F'|'B', [points]) or ('V', point)
-HAND_ROUTES = [
-    ('HB_B', ('U6', '8'), [            # bootstrap cap C39 -> driver HB pin, over the driver
-        ('F', [(70.25, 28.475), (70.25, 29.9)]), ('V', (70.25, 29.9)),
-        ('B', [(70.25, 29.9), (77.475, 29.9), (77.475, 34.0)]), ('V', (77.475, 34.0)),
-        ('F', [(77.475, 34.0), (77.475, 35.6)]),
-    ]),
-]
+HAND_ROUTES = {     # {sha1 of the SES file: [routes]}, filled per routing session
+    # rev C: LATCH_B (Q1 base) is boxed in by inner-layer tracks; go over Q1 pin 3 on F.Cu
+    '3ea9f4de44a089cb82b0a6ff3ac9a04d7fcae6f2': [
+        ('LATCH_B', ('Q1', '1'), [('F', [(137.73, 55.0), (138.3, 54.4), (141.25, 54.4), (141.25, 59.88)])]),
+    ],
+}
 
 
-def hand_routes(board):
+def hand_routes(board, ses_path):
+    import hashlib
+    digest = hashlib.sha1(open(ses_path, 'rb').read()).hexdigest()
     added = 0
-    for netname, (ref, padnum), segs in HAND_ROUTES:
+    for netname, (ref, padnum), segs in HAND_ROUTES.get(digest, []):
         ni = board.FindNet(netname)
         pad = next(p for p in board.FindFootprintByReference(ref).Pads() if p.GetNumber() == padnum)
         reached = any(t.GetNetCode() == ni.GetNetCode() and t.GetClass() == 'PCB_TRACK' and
@@ -251,14 +295,186 @@ def hand_routes(board):
     return added
 
 
-def through_hole_at(board, q, ni):
+def via_fits(board, q, ni, radius, clearance=0.21):
+    """True if a via at q keeps clearance to every pad, track and via of other nets.
+    (A layer change the router made through a through-hole pin looks like a
+    via-less layer change at a nearby bend point; such a spot fails here.)"""
     pos = mm(*q)
+    acc = pcbnew.FromMM(radius + clearance)
     for fp in board.GetFootprints():
         for p in fp.Pads():
-            if p.GetNetCode() == ni.GetNetCode() and p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH \
-                    and p.HitTest(pos):
+            if p.GetNetCode() != ni.GetNetCode() and p.HitTest(pos, acc):
+                return False
+    for t in board.GetTracks():
+        if t.GetNetCode() != ni.GetNetCode() and t.HitTest(pos, acc):
+            return False
+    return True
+
+
+def through_hole_at(board, q, ni):
+    """True if a pad of this net at q already joins the layers: a plated pad, or
+    an SMD pad whose pin also has plated holes (e.g. an exposed pad with
+    thermal vias, which the router treats as a through-hole pin)."""
+    pos = mm(*q)
+    for fp in board.GetFootprints():
+        pads = list(fp.Pads())
+        plated = {p.GetNumber() for p in pads if p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH}
+        for p in pads:
+            if p.GetNetCode() == ni.GetNetCode() and p.HitTest(pos) and \
+                    (p.GetAttribute() == pcbnew.PAD_ATTRIB_PTH or p.GetNumber() in plated):
                 return True
     return False
+
+
+REPAIR_VIAS = []
+COSMETIC = ('unconnected_items', 'silk_overlap', 'silk_over_copper', 'silk_edge_clearance',
+            'lib_footprint_issues', 'lib_footprint_mismatch')
+_ITEM = re.compile(r'@\(([-0-9.]+) mm, ([-0-9.]+) mm\): (.*)')
+
+
+def drc(board, path='/tmp/bldc48-drc-probe.rpt'):
+    """Run KiCad DRC; return (list of (type, [(x, y, desc), ...]), n_unconnected)."""
+    pcbnew.WriteDRCReport(board, path, pcbnew.EDA_UNITS_MILLIMETRES, True)
+    items, cur = [], None
+    for line in open(path):
+        m = re.match(r'\[(\w+)\]:', line)
+        if m:
+            cur = (m.group(1), [])
+            items.append(cur)
+            continue
+        m = _ITEM.search(line)
+        if m and cur:
+            cur[1].append((float(m.group(1)), float(m.group(2)), m.group(3)))
+    unconnected = sum(1 for t, _ in items if t == 'unconnected_items')
+    return items, unconnected
+
+
+def n_errors(items):
+    return sum(1 for t, _ in items if t not in COSMETIC)
+
+
+def veto_repair_vias(board):
+    """Drop any via the SES repair added that DRC finds in conflict with another net."""
+    items, _ = drc(board)
+    bad = {(round(x, 3), round(y, 3)) for t, locs in items if t not in COSMETIC
+           for x, y, d in locs if d.startswith('Via')}
+    removed = 0
+    for v in list(REPAIR_VIAS):
+        p = v.GetPosition()
+        if (round(pcbnew.ToMM(p.x), 3), round(pcbnew.ToMM(p.y), 3)) in bad:
+            board.Remove(v)
+            REPAIR_VIAS.remove(v)
+            removed += 1
+    return removed
+
+
+def _endpoints(board, x, y, desc):
+    """Candidate (point, layers) to start a repair route from a DRC item."""
+    pos = mm(x, y)
+    both = {pcbnew.F_Cu, pcbnew.B_Cu}
+    if desc.startswith(('Pad', 'PTH pad')):
+        m = re.match(r'(?:PTH pad|Pad) (\S+) \[.*\] of (\S+)', desc)
+        fp = board.FindFootprintByReference(m.group(2))
+        pad = next(p for p in fp.Pads() if p.GetNumber() == m.group(1) and p.HitTest(pos))
+        c = pad.GetPosition()
+        layers = both if pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH else {pad.GetLayer()}
+        return [((pcbnew.ToMM(c.x), pcbnew.ToMM(c.y)), layers)]
+    if desc.startswith('Via'):
+        return [((x, y), both)]
+    for t in board.GetTracks():
+        if t.GetClass() == 'PCB_TRACK' and t.HitTest(pos):
+            return [((pcbnew.ToMM(e.x), pcbnew.ToMM(e.y)), {t.GetLayer()})
+                    for e in (t.GetStart(), t.GetEnd())]
+    return []
+
+
+def _shapes(a, b):
+    (ax, ay), (bx, by) = a, b
+    dx, dy = bx - ax, by - ay
+    m = min(abs(dx), abs(dy))
+    sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
+    return [[a, b], [a, (bx, ay), b], [a, (ax, by), b],
+            [a, (ax + sx * m, ay + sy * m), b], [a, (bx - sx * m, by - sy * m), b]]
+
+
+def auto_repair(board, max_tries=400):
+    """Close connections the router left open: try short F/B routes (direct,
+    L, 45-degree, or via-to-the-other-layer) and keep the first that DRC
+    accepts with no new violations."""
+    fixed = 0
+    items, base_unc = drc(board)
+    base_err = n_errors(items)
+    for t, locs in [it for it in items if it[0] == 'unconnected_items']:
+        if len(locs) < 2:
+            continue
+        net = re.search(r'\[(.*?)\]', locs[0][2]).group(1)
+        ni = board.FindNet(net)
+        ea, eb = _endpoints(board, *locs[0]), _endpoints(board, *locs[1])
+        if not ea or not eb:
+            continue
+        (a, la), (b, lb) = min(((p, q) for p in ea for q in eb),
+                               key=lambda pq: math.dist(pq[0][0], pq[1][0]))
+        cands = []
+        for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+            if layer in la and layer in lb:
+                cands += [[(layer, path)] for path in _shapes(a, b)]
+        other = {pcbnew.F_Cu: pcbnew.B_Cu, pcbnew.B_Cu: pcbnew.F_Cu}
+        la1, lb1 = next(iter(la)), next(iter(lb))
+        offs = [(d * ux, d * uy) for d in (0.9, 1.4, 2.0)
+                for ux, uy in ((1, 0), (-1, 0), (0, 1), (0, -1),
+                               (0.707, 0.707), (0.707, -0.707), (-0.707, 0.707), (-0.707, -0.707))]
+        mids = [other[la1] if la1 == lb1 else lb1]
+
+        def outside_keepout(q):
+            return q[0] > POWER_X + 1.0 or q[1] > KEEPOUT_Y
+
+        for oa in offs:
+            for ob in offs:
+                va = (round(a[0] + oa[0], 3), round(a[1] + oa[1], 3))
+                vb = (round(b[0] + ob[0], 3), round(b[1] + ob[1], 3))
+                inner = [pcbnew.In1_Cu, pcbnew.In2_Cu] if outside_keepout(va) and outside_keepout(vb) else []
+                for mid in mids + inner:
+                    for path in _shapes(va, vb)[:3]:
+                        cands.append([(la1, [a, va]), ('via', va), (mid, path), ('via', vb), (lb1, [vb, b])])
+
+        def length(c):
+            return sum(math.dist(p, q) for layer, d in c if layer != 'via' for p, q in zip(d, d[1:])) + \
+                2.0 * sum(1 for layer, _ in c if layer == 'via')
+        cands.sort(key=length)
+        for cand in cands[:max_tries]:
+            added = []
+            for layer, data in cand:
+                if layer == 'via':
+                    v = pcbnew.PCB_VIA(board)
+                    v.SetPosition(mm(*data))
+                    v.SetWidth(pcbnew.FromMM(0.6))
+                    v.SetDrill(pcbnew.FromMM(0.3))
+                    v.SetNet(ni)
+                    board.Add(v)
+                    added.append(v)
+                    continue
+                for p0, p1 in zip(data, data[1:]):
+                    if p0 == p1:
+                        continue
+                    tr = pcbnew.PCB_TRACK(board)
+                    tr.SetStart(mm(*p0))
+                    tr.SetEnd(mm(*p1))
+                    tr.SetWidth(pcbnew.FromMM(0.25))
+                    tr.SetLayer(layer)
+                    tr.SetNet(ni)
+                    board.Add(tr)
+                    added.append(tr)
+            its, unc = drc(board)
+            if unc < base_unc and n_errors(its) <= base_err:
+                base_unc = unc
+                fixed += 1
+                print(f'  repaired {net} with {len(added)} items')
+                break
+            for it in added:
+                board.Remove(it)
+        else:
+            print(f'  could not repair {net}')
+    return fixed
 
 
 def import_ses(board, ses_path):
@@ -289,6 +505,7 @@ def import_ses(board, ses_path):
         v.SetDrill(pcbnew.FromMM(size[1]))
         v.SetNet(ni)
         board.Add(v)
+        return v
 
     for net in find(find1(routes, 'network_out'), 'net'):
         ni = board.FindNet(net[1])
@@ -321,8 +538,9 @@ def import_ses(board, ses_path):
         # some Freerouting builds drop vias from the SES: re-insert one wherever
         # the route changes layer and there is no via (or through-hole pad)
         for q, ls in ends.items():
-            if len(ls) > 1 and q not in vias and not through_hole_at(board, q, ni):
-                add_via(ni, q[0], q[1], default_via)
+            if len(ls) > 1 and q not in vias and not through_hole_at(board, q, ni) and \
+                    via_fits(board, q, ni, default_via[0] / 2):
+                REPAIR_VIAS.append(add_via(ni, q[0], q[1], default_via))
                 n_fixed += 1
     if n_fixed:
         print(f'added {n_fixed} vias missing from the SES')
@@ -350,8 +568,10 @@ def main():
     ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
     ds.SetCustomViaSize(True)
     plane_keepout(board)
+    edge_keepout(board)
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
+    patch_dsn(dsn)
     print('DSN written')
 
     if args.ses:
@@ -374,7 +594,9 @@ def main():
 
     nt, nv = import_ses(board, ses)
     print(f'imported {nt} track segments, {nv} vias')
-    print(f'added {hand_routes(board)} hand route(s)')
+    print(f'added {hand_routes(board, ses)} hand route(s)')
+    print(f'removed {veto_repair_vias(board)} repair via(s) that DRC rejected')
+    print(f'auto-repaired {auto_repair(board)} open connection(s)')
     print(f'added {via_arrays(board)} power vias')
     inner_planes(board)
     outer_pours(board)
