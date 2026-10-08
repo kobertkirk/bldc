@@ -346,7 +346,7 @@ def patch_dsn(path, board, clearance_um=None):
     source nets (FET source -> shunt) and the motor wire pads on the switch
     nodes.  The router still joins each switch node to the DRV8353 SHx pin."""
     txt = open(path).read()
-    clearance_um = clearance_um or round(SIG_CLEAR * 1000 + 10)
+    clearance_um = clearance_um or round(SIG_CLEAR * 1000 + 25)   # Freerouting rounds
     txt = re.sub(r'\(clearance (200|150)\.1\)', f'(clearance {clearance_um})', txt)
     # In1 is the solid GND plane: a power layer for the router (vias pass, no wires)
     txt = re.sub(r'(\(layer In1\.Cu\s*\(type )signal\)', r'\1power)', txt)
@@ -791,10 +791,20 @@ def nudge_fanout(board):
     return moved
 
 
-def stitch_islands(board, net='GND', step=0.5):
-    """A filled piece of an outer-layer GND pour with no via or through-hole pad
-    in it is an island: put one via in it (to the solid In1 plane)."""
+def stitch_all_islands(board):
+    n = stitch_islands(board, 'GND')
+    for ph in 'ABC':                     # a low-side / switch-node pour piece cut off on one layer
+        n += stitch_islands(board, f'LS_{ph}', both=True) + stitch_islands(board, f'SW_{ph}', both=True)
+    return n
+
+
+def stitch_islands(board, net='GND', step=0.5, both=False):
+    """A filled piece of an outer-layer pour with no via or through-hole pad in
+    it is an island: put one via in it (GND: to the solid In1 plane; with
+    both=True the via must also land in the net's pour on the other outer layer)."""
     ni = board.FindNet(net)
+    if ni is None:
+        return 0
     code = ni.GetNetCode()
     drills = [t.GetPosition() for t in board.GetTracks() if t.GetClass() == 'PCB_VIA' and t.GetNetCode() == code]
     drills += [p.GetPosition() for f in board.GetFootprints() for p in f.Pads()
@@ -823,7 +833,12 @@ def stitch_islands(board, net='GND', step=0.5):
                          for j in range(int((y1 - y0) / step) + 1)]
                 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
                 spots.sort(key=lambda q: math.hypot(q[0] - cx, q[1] - cy))
+                other = pcbnew.B_Cu if layer == pcbnew.F_Cu else pcbnew.F_Cu
                 for q in spots:
+                    if both and not any(zz.GetNetCode() == code and zz.IsOnLayer(other) and
+                                        zz.GetFilledPolysList(other).Contains(mm(*q))
+                                        for zz in board.Zones() if not zz.GetIsRuleArea()):
+                        continue
                     if inner.Contains(mm(*q)) and via_fits(board, q, ni, 0.3, 0.25):
                         v = pcbnew.PCB_VIA(board)
                         v.SetPosition(mm(*q))
@@ -1219,9 +1234,9 @@ def main():
     if n:
         print(f'routed {n} connection(s) into their pours')
         fill(board)
-    n = stitch_islands(board)
+    n = stitch_all_islands(board)
     if n:
-        print(f'stitched {n} GND pour island(s)')
+        print(f'stitched {n} pour island(s)')
         fill(board)
     board.Save(PCB)
     rpt = os.path.join(args.workdir, 'drc.rpt')
