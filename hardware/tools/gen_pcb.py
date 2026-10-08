@@ -39,7 +39,7 @@ from gen_schematic import KICAD_DIR, PROJECT_LIB, Libs, resolve_pins, uid  # noq
 FPDIR = '/usr/share/kicad/footprints'
 OUT = os.environ.get('BLDC_PCB') or \
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'kicad', 'bldc48.kicad_pcb')
-W, H = 90.0, float(os.environ.get('BLDC_H', 68.5))   # board size, mm (9.6 sq in)
+W, H = 90.0, float(os.environ.get('BLDC_H', 95.0))   # board size, mm (90 x 95 = 3.5 x 3.7 in)
 GAP = 1.0                    # min spacing between packed courtyards
 
 # power-array geometry (shared with route_pcb.py)
@@ -551,9 +551,9 @@ def main():
     board.Add(rect)
 
     # silkscreen: polarity and phase labels next to the terminals
-    labels = [('BLDC48 rev F', 45.0, H - 0.9, 0.8),
+    labels = [('BLDC48 rev F', 82.0, H - 12.0, 0.8),
               ('+', BAT_POS['BAT+'][0] - 4.6, BAT_POS['BAT+'][1], 2.0),
-              ('-', BAT_POS['BAT-'][0] - 4.6, BAT_POS['BAT-'][1], 2.0)]
+              ('-', BAT_POS['BAT-'][0], BAT_POS['BAT-'][1] + 4.4, 2.0)]
     labels += [(ph, col_x(ph) + TERM_X, Y_TERM - 4.4, 1.6) for ph in 'ABC']
     for txt, x, y, size in labels:
         t = pcbnew.PCB_TEXT(board)

@@ -1014,7 +1014,7 @@ def apply_ses_placement(board, ses_path):
             rot = float(pl[5]) if len(pl) > 5 else 0.0
             if back != fp.IsFlipped():
                 fp.Flip(fp.GetPosition(), True)
-            fp.SetOrientationDegrees((180.0 - rot) if back else rot)
+            fp.SetOrientationDegrees((rot + 180.0) if back else rot)   # KiCad 90 on the back is SES 270
             fp.SetPosition(mm(x, y))
             n += 1
     return n
