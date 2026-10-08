@@ -279,6 +279,30 @@ def route_to_pour(board, net, a):
     return g, path
 
 
+def pin_exit(board, net, x, y, ext=0.45):
+    """For a fine-pitch pin (narrow pad) of net at (x, y): the point on its axis
+    just beyond its outer tip, from where a track can leave between the
+    neighbouring pins.  None for anything else."""
+    q = pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y))
+    code = board.FindNet(net).GetNetCode()
+    for fp in board.GetFootprints():
+        for p in fp.Pads():
+            if p.GetNetCode() != code or not p.HitTest(q):
+                continue
+            bb = p.GetBoundingBox()
+            w, h = to_mm(bb.GetWidth()), to_mm(bb.GetHeight())
+            if min(w, h) > 0.45 or max(w, h) < 2 * min(w, h):
+                return None
+            px, py = to_mm(p.GetPosition().x), to_mm(p.GetPosition().y)
+            cx, cy = to_mm(fp.GetPosition().x), to_mm(fp.GetPosition().y)
+            if w > h:
+                sx = 1 if px >= cx else -1
+                return (px + sx * (w / 2 + ext), py)
+            sy = 1 if py >= cy else -1
+            return (px, py + sy * (h / 2 + ext))
+    return None
+
+
 def item_layers(board, net, x, y):
     """Layers on which the net's pad / track / via at (x, y) can be reached."""
     q = pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y))
@@ -300,10 +324,19 @@ SOFT_COST = 40.0
 
 def route(board, net, a, b, to_plane=False, fence=True, soft=False):
     """A* path; with soft=True other signal nets may be crossed at a cost, and
-    the result also returns the set of nets that would have to be ripped up."""
-    g = build(board, net, fence, soft, origin=a)
+    the result also returns the set of nets that would have to be ripped up.
+    A fine-pitch pin is left / entered through the point just past its tip
+    (g.head / g.tail), so the grid never has to squeeze between its neighbours."""
     sl = item_layers(board, net, *a)
     gl = [] if to_plane else item_layers(board, net, *b)
+    ea = pin_exit(board, net, *a)
+    eb = None if to_plane else pin_exit(board, net, *b)
+    g = build(board, net, fence, soft, origin=ea or a)
+    g.head, g.tail = ea, eb
+    if ea:
+        a = ea
+    if eb:
+        b = eb
     si, sj = g.ij(*a)
     ti, tj = g.ij(*b)
     def on_3v3(i, j):                              # In2 is +3V3 outside the +48 V island
@@ -422,14 +455,29 @@ def to_hand_route(g, path, a, b):
         run.append((i, j))
     flush(k0)
     tracks = [it for it in items if it[0] != 'V']
+    head, tail = getattr(g, 'head', None), getattr(g, 'tail', None)
     if tracks:                                     # snap the ends onto the real items
-        tracks[0][1][0] = a
+        if head and items[0][0] != 'V':
+            tracks[0][1][0:1] = [a, head]          # straight out of the pin, then away
+        else:
+            tracks[0][1][0] = a
         if b is not None:
-            tracks[-1][1][-1] = b
+            if tail and items[-1][0] != 'V':
+                tracks[-1][1][-1:] = [tail, b]
+            else:
+                tracks[-1][1][-1] = b
     if items and items[0][0] == 'V':
-        items[0] = ('V', a)
+        if head:                                   # via just past the pin tip, stub to the pin
+            items[0] = ('V', head)
+            items.insert(0, (CODES[LAYERS[path[0][2]]], [a, head]))
+        else:
+            items[0] = ('V', a)
     if items and items[-1][0] == 'V' and b is not None:
-        items[-1] = ('V', b)
+        if tail:
+            items[-1] = ('V', tail)
+            items.append((CODES[LAYERS[path[-1][2]]], [tail, b]))
+        else:
+            items[-1] = ('V', b)
     return items
 
 
