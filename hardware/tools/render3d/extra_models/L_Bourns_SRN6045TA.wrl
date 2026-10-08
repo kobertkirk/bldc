@@ -1,0 +1,8 @@
+#VRML V2.0 utf8
+# Render-only stand-in for Bourns SRN6045TA (6 x 6 x 4.5 mm)
+Transform { translation 0.0000 0.0000 0.8858 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.16 0.16 0.17 specularColor 0.2 0.2 0.2 shininess 0.2 } }
+  geometry Box { size 2.3622 2.3622 1.7717 } } ] }
+Transform { translation 0.0000 0.0000 1.7815 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.62 0.36 0.16 specularColor 0.2 0.2 0.2 shininess 0.2 } }
+  geometry Box { size 1.7323 1.7323 0.0197 } } ] }

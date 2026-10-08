@@ -1,0 +1,8 @@
+#VRML V2.0 utf8
+# Render-only stand-in for JST JST_GH_BM03B-GHS-TBT_1x03-1MP_P1.25mm_Vertical (not in the local KiCad 3D library)
+Transform { translation 0.0000 -0.1083 0.8366 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.92 0.9 0.82 specularColor 0.2 0.2 0.2 shininess 0.2 } }
+  geometry Box { size 2.1654 1.6732 1.6732 } } ] }
+Transform { translation 0.0000 -0.1083 1.5591 children [ Shape {
+  appearance Appearance { material Material { diffuseColor 0.25 0.25 0.25 specularColor 0.2 0.2 0.2 shininess 0.2 } }
+  geometry Box { size 1.7717 0.9449 0.2362 } } ] }
