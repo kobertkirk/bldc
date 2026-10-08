@@ -26,7 +26,7 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The @SIZE@ mm 4-layer, two-sided PCB (rev F) is **fully routed and passes KiCad
+> [Verification](#verification)). The 90 × 95 mm (3.5 × 3.7 in) 4-layer, two-sided PCB (rev F) is **fully routed and passes KiCad
 > DRC with 0 violations and 0 unconnected pads**. The power stage is placed by script around fixed columns; the signal
 > routing was done by an autorouter (Freerouting), a small grid router for what it leaves open, and scripted copper
 > pours, so have it reviewed before ordering. The firmware compiles and passes a detailed simulation, but it has
@@ -202,13 +202,15 @@ a driver that does not answer stops the motor from starting (`drv` shows why).
 
   | Check | Result |
   |---|---|
-  | Detect R / L / hall angles | 119.9 mΩ (120) / 259 µH (250) / 0.3° worst error |
+  | Detect R / L / hall angles | 119.9 mΩ (120) / 259 µH (250) / 0.2° worst error |
   | Start from standstill, full throttle | torque ≥ 86 % of command from the first instant |
   | Peak phase current | 60.2 A (limit 60 A) |
-  | Peak battery current (100 ms avg) | 34.7 A (limit 35 A) |
+  | Peak battery current (100 ms avg) | 34.3 A (limit 35 A) |
   | 120 A phase-short spike | hard trip, gates off within 200 µs |
-  | Current-loop tracking | 0.49 A rms |
-  | Top speed, 26″ wheel | ≈ 40 km/h (voltage limited) |
+  | Gate-driver fault (nFAULT) while riding | gates off within 2 PWM periods, driver re-initialised before restart |
+  | High-duty current rebuild (low-side shunts) | exercised continuously at top speed, no faults |
+  | Current-loop tracking | 0.47 A rms |
+  | Top speed, 26″ wheel | ≈ 39 km/h (voltage limited) |
   | Coast, re-engage at speed, reverse, brake, throttle-wire break, hall unplug, low battery, overvoltage | all pass |
 
 ## Building the firmware
@@ -228,23 +230,27 @@ KiCad libraries. After you edit the circuit, run `hardware/tools/regen.sh`. It n
 files directly.
 
 `regen.sh` only places the parts. The board was then routed with
-`hardware/tools/route_pcb.py --legacy --no-optimize --freerouting freerouting-1.9.0.jar`. This script:
-- keeps tracks off the inner layers under the FETs, DC-link caps and shunts (rule area)
+`hardware/tools/route_pcb.py --legacy --no-optimize --passes 30 --freerouting freerouting-1.9.0.jar`. This script:
+- keeps tracks off the inner layers under the FETs, DC-link caps and shunts, and off the outer layers across the
+  switch-node and low-side copper (rule areas)
+- gives every GND pad outside the power stage its own via into the solid In1 plane, and puts a fixed "sense tap" via
+  in each switch node next to the high-side gate pin for the DRV8353's SHx input
 - routes the signals with Freerouting (headless, under `xvfb-run`)
-- imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file itself,
-  restores any layer-change vias the router left out, adds the recorded hand routes in `HAND_ROUTES`, then tries
-  short DRC-checked candidate routes for anything still open; `RIP_UP` throws away a router detour, e.g. a gate
-  drive looped across the board, so it can be re-made locally)
-- `astar_route.py` is a small 4-layer grid router that finds the recorded routes for connections Freerouting
-  leaves open, keeping clear of the power copper
-- adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads
+- imports the result (KiCad 7 can only import a Specctra session from its GUI, so the script parses the file
+  itself and restores any layer-change vias the router left out)
+- `astar_route.py` is a small 4-layer grid router for connections Freerouting leaves open, keeping clear of the
+  power copper
+- adds the GND / +48V / +3V3 planes, the 35 A outer-layer pours and via arrays in the power pads, routes anything
+  still cut off into its own pour, and stitches pour islands to the planes
 - fills the zones and writes a DRC report
 
-The routing session is saved in `hardware/kicad/routing/bldc48.ses`, so `route_pcb.py --ses
-../kicad/routing/bldc48.ses` rebuilds the routed board in about a minute without running the autorouter.
+The routing session is saved in `hardware/kicad/routing/bldc48.ses` (with the DRC report next to it); `route_pcb.py
+--ses ../kicad/routing/bldc48.ses` rebuilds a routed board from it, taking the part positions from the session. The
+committed `bldc48.kicad_pcb` is the reference: a rebuild can differ in a few fan-out vias and then needs a DRC pass.
 
-`hardware/tools/render3d/render.sh` exports the board to VRML with the KiCad 3D models and renders the PNGs in
-`hardware/renders/` with three.js in headless Chromium.
+`hardware/tools/render3d/render.sh` exports the board to VRML with the KiCad 3D models (plus simple stand-ins for the
+JST-GH connectors, the SRN6045 inductor and the DRV8353 QFN, whose models are not in the KiCad 7 library) and renders
+the PNGs in `hardware/renders/` with three.js in headless Chromium; `layers.sh` makes the copper-layer images.
 
 **Note:** regenerating overwrites placement and routing. For changes after this point, edit the board in KiCad and use
 Tools → Update PCB from Schematic. The footprints are already linked to their schematic symbols for that.
@@ -254,46 +260,43 @@ Tools → Update PCB from Schematic. The footprints are already linked to their 
 | Overview | Power stage |
 |---|---|
 | ![overview](hardware/renders/bldc48-iso.png) | ![power stage](hardware/renders/bldc48-power.png) |
-| ![top](hardware/renders/bldc48-top.png) | ![controller](hardware/renders/bldc48-logic.png) |
+| ![top](hardware/renders/bldc48-top.png) | ![wire pads](hardware/renders/bldc48-terminals.png) |
 
 Routing (tracks only, pours hidden): ![routing](hardware/renders/bldc48-routing.png)
 
 Copper layers: [top](hardware/renders/bldc48-layer-top.png) · [inner 1, GND](hardware/renders/bldc48-layer-in1.png) ·
 [inner 2, +48V/+3V3](hardware/renders/bldc48-layer-in2.png) · [bottom](hardware/renders/bldc48-layer-bottom.png)
 
-Terminals close-up: ![terminals](hardware/renders/bldc48-terminals.png)
+Stackup as built: F.Cu power stage, gate drive and signals, with pours (switch nodes, low-side sources, +48V bus,
+GND fill) · In1.Cu solid GND plane · In2.Cu +48V under the power stage and +3V3 fill elsewhere, plus signals ·
+B.Cu the same high-current pours under the bridge, the MCU and I/O parts, and signals. The inner planes are unbroken
+under the FETs, DC-link caps and shunts. 1666 track segments and 269 vias; each switch-node and low-side pour is one
+unbroken piece on both outer layers (checked by script).
 
-Stackup as built: F.Cu signals + pours (switch nodes, phase outputs, +48V bus, GND fill) · In1.Cu GND plane ·
-In2.Cu +48V under the power stage and +3V3 under the logic · B.Cu signals + the same high-current pours. The inner
-planes are unbroken under the FETs, DC-link caps and shunts. 1734 track segments, 454 vias, of which 304 are arrays
-in the FET, shunt and DC-link capacitor pads tying the outer pours and the planes together.
+## Rev F: DRV8353RS, 90 × 95 mm
 
-## Rev E: compact layout, four large bulk capacitors
+Rev E (180 × 69.5 mm) was still too big. Rev F redesigns the circuit around one TI DRV8353RS smart gate driver and
+puts the parts on both sides of a **90 × 95 mm** board, **68 % of rev E's area** (3.5 × 3.7 in instead of
+7.1 × 2.7 in).
+- **One chip instead of eight.** The DRV8353RS replaces the three LM5109B gate drivers, the three INA240A1 current
+  amplifiers and both LM5164 bucks: it has the gate drive (charge pump + low-side regulator, no 12 V rail), three
+  current-sense amplifiers and a 6–95 V buck that makes the +5 V rail.
+- **Low-side shunts.** The three 0.5 mΩ Kelvin shunts now sit in the low-side sources (the DRV8353's amplifiers are
+  low-side). The firmware samples while all low-side FETs conduct and rebuilds the third current above 90 % duty.
+- **Three 1000 µF / 100 V** cans (Aishi ERS1KM102M35OT, 18 × 35 mm) in a column next to the bridge, plus two 2.2 µF
+  ceramics straight across each half bridge. 3000 µF is still 1.7 × rev B's 1760 µF. Cans can be bent over before
+  soldering if the case is low.
+- **12 AWG wires soldered straight into the board** instead of M5 bolt terminals: battery pads at the right of the
+  bridge, one motor pad per phase column. JST-GH (1.25 mm, latching) for all signal connectors.
+- **Two-sided assembly.** Power stage, gate driver, supply and connectors on top; MCU, its filters and the I/O
+  conditioning on the bottom, outside the heat-plate area under the FETs.
+- The phase columns run C-B-A from left to right, following the DRV8353's pin order, so no phase's gate drive crosses
+  another's. The labels are only names: auto-detect learns the hall/phase order.
+- Signal tracks 0.2 mm with 0.15 mm clearance (JLCPCB's 4-layer minimum is 0.09 mm). The +48 V and switch-node pours
+  keep 0.5 mm.
 
-Rev E has the same circuit as rev B on a much smaller board: **180 × 69.5 mm**, against 240 × 100 mm for rev B
-(48 % less area).
-- The DC link is **4 × 1000 µF / 100 V** (Aishi ERS1KM102M35OT, 18 × 35 mm), one can over each 28.5 mm of the bridge
-  row, instead of 8 × 220 µF.
-  - That is 4000 µF instead of 1760 µF, with half the parts and through-hole joints.
-  - A large can carries more ripple current than a small one, so 4 large cans carry more in total than 8 small ones.
-  - The cans are 35 mm tall. The 18 mm cap row makes the board 3.5 mm taller than rev D (185 × 66 mm) but 5 mm
-    narrower, so the area is about the same.
-- The three half-bridge columns are 38 mm wide (rev B: 50 mm). The gate driver, shunt and INA240 of each phase pack
-  around its FET pair.
-- Each motor terminal sits straight below its shunt, level with the DC-link ceramics, instead of at the bottom edge.
-  A 5 mm routing channel for the controller signals runs underneath.
-- The battery strip is 17 mm wide. BAT+ and BAT− are 26 mm apart with the TVS between them.
-- The buck inductors are 8 × 8 mm Bourns SRN8040TA instead of 12 × 12 mm SRR1260. The 12 V and 5 V loads are only
-  a few hundred mA, so the smaller parts still have plenty of saturation margin.
-- The logic, supplies and connectors fill a 47.5 mm strip on the right. Two of the 2-pin connectors sit on the bottom
-  edge below the supplies. A skyline packer (with 90° rotation of small parts) fills this strip much more tightly than
-  the earlier row packer.
-
-Each phase output is a 7.3 mm pour on both outer layers (2 oz), about 20 mm from shunt to terminal. By IPC-2221 that
-carries about 55 A at a 30 °C rise, which covers the 60 A peak / ≈ 42 A rms phase limit. Outer-layer rule areas keep
-every signal track off these strips. In rev C, signals crossed the phase B and C strips and cut the pour on one layer,
-so only one layer carried the motor current there. Every switch-node and phase pour was checked to be one unbroken
-piece on both layers. Keep the 2 oz outer copper and the heat-spreader plate.
+Each phase is a column: high-side FET, low-side FET, shunt, two 2.2 µF ceramics and the motor wire pad on the switch
+node beside the FETs. The heat plate goes under the bridge (bottom side, no parts there).
 
 ## Ordering from JLCPCB (rough cost)
 
@@ -302,44 +305,40 @@ real quote, because their prices change often.
 
 | Item (order of 5 assembled boards) | Approx. |
 |---|---|
-| 4-layer PCB 180 × 69.5 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $40–70 |
-| PCBA setup + stencil (economic) | ≈ $10 |
-| "Extended" LCSC part loading fee, ≈ $3 per unique part type (~25 types) | ≈ $75 |
-| SMT + through-hole joints (≈ 690 SMT + ≈ 37 THT per board) | ≈ $13 |
-| Parts (≈ $28/board, all from LCSC) | ≈ $140 |
+| 4-layer PCB 90 × 95 mm, 1.6 mm, 2 oz outer copper, 5 pcs | $30–50 |
+| PCBA setup + stencils, **two-sided** (standard PCBA: both sides placed) | ≈ $50 |
+| "Extended" LCSC part loading fee, ≈ $3 per unique part type (~22 types) | ≈ $65 |
+| SMT + through-hole joints (≈ 530 SMT + 6 THT per board) | ≈ $10 |
+| Parts (≈ $30/board, all from LCSC; the DRV8353RS is ≈ $6, the six FETs ≈ $15) | ≈ $150 |
 | Shipping (DHL / FedEx) | $20–35 |
-| **Total for 5** | **≈ $300–345, about $60–69 per board** |
+| **Total for 5** | **≈ $325–360, about $65–72 per board** |
+
+The five 12 AWG wire pads are left for you to solder (wires are not assembled). Choosing JLCPCB's "economic" PCBA
+is not possible for a board with parts on both sides; if cost matters more than size, rev E (one-sided, 180 ×
+69.5 mm) is in the git history.
 
 Every part in the BOM has an LCSC part number or is a generic resistor/capacitor/diode/connector that LCSC stocks in
 quantity, so JLCPCB can build the whole board.
 - The bulk capacitors are Aishi ERS1KM102M35OT (C724666): 1000 µF/100 V, 18 × 35 mm, 7.5 mm pitch, 10 000 h at
   105 °C. Aishi's "1K" voltage code is 100 V in its own scheme ("1B" is 80 V), and LCSC lists the part as 100 V.
-- I could not read the ripple rating, because the datasheet was not reachable from here. Same-series 1000 µF parts at
-  50–63 V are rated about 1.8–2.6 A at 120 Hz, and an electrolytic carries roughly 1.4–1.7× that at 20 kHz, so expect
-  roughly 3 A per can (about 12 A for four).
-- Simple estimate: about 17 A rms total at 35 A battery current, 50 % duty. At low speed with the full 60 A phase
-  current the three-phase worst case reaches about 27 A rms (for a short time, like a hill start).
-- Electrolytics take short overloads well, but check the datasheet. If the cans run hot in sustained hard use, lower
-  `i_phase_max` / `i_batt_max`, or use Panasonic EEU-FC2A102 / Nichicon UHE2A102 parts (hand-solder or global
-  sourcing).
-
-The 33 µH inductor: use the Bourns SRN8040TA-330M if JLCPCB has it, otherwise the YJYCOIN YNR8040-330M (C497847),
-an 8 × 8 mm part in the same format. Check its saturation current is ≥ 1 A.
-
-- The shunts are Bourns CSS4J-4026R-L500F (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal, 10.06 × 6.60 mm),
-  which JLCPCB can place. The footprint is KiCad's `R_Shunt_Isabellenhuette_BVR4026`: Bourns' recommended land
-  pattern has the same 10.6 mm span, 5.6 mm current pads and 0.9 mm sense pads, so the Isabellenhütte BVR 4026 also
-  fits as a drop-in alternative. Check the pad drawing against the Bourns datasheet before ordering. Avoid 3 % parts such as
-  the Milliohm HOVB4026-5W-0.5mR-3%: they add up to 3 % gain error to every current reading.
-- Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, LM5109B, LM5164, the
-  1000 µF/100 V caps and the 100 V ceramics. Do not let the assembly service substitute lower-voltage parts.
+- Ripple: at 35 A battery current the DC link carries roughly 17 A rms, ≈ 5.7 A per can with three cans; the ceramics
+  take the high-frequency part. Expect the cans to run warm in sustained hard use: watch their temperature, or lower
+  `i_batt_max` / `i_phase_max`, or fit higher-ripple parts (Panasonic EEU-FC2A102, Nichicon UHE2A102).
+- The shunts are Bourns CSS4J-4026R-L500F (LCSC/JLCPCB C2076423, 0.5 mΩ ±1 %, 5 W, 4-terminal). The footprint is
+  KiCad's `R_Shunt_Isabellenhuette_BVR4026` (same 10.6 mm span and pad layout).
+- The DRV8353RS is TI DRV8353RSRGZR (LCSC C506246), VQFN-48 7 × 7 mm with an exposed pad. Its exposed pad has a
+  thermal-via array into the GND plane; ask for the vias to be tented or plugged.
+- Check that every part you order has a 100 V rating where the BOM needs one: the TOLL FETs, DRV8353RS, the
+  1000 µF/100 V caps, the 100 V ceramics and the SS110 diode. Do not let the assembly service substitute
+  lower-voltage parts.
 - Set the stackup to 2 oz outer copper. JLCPCB's cheap 4-layer offer is 1 oz.
-- JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order. A
-  2-board order is still about $190, so most of the cost of a small order is fees.
-- Board size: 180 × 69.5 mm (7.1 × 2.7 in), 1.6 mm thick. The 1000 µF caps are the tallest parts, so the assembled
-  board is about 37 mm tall. Four M3 mounting holes sit 4 mm in from each corner (172 × 61.5 mm hole spacing).
+- JLCPCB only assembles from 2 boards upward, and the setup and part-loading fees are charged once per order, so
+  most of the cost of a small order is fees.
+- Board size: 90 × 95 mm (3.5 × 3.7 in), 1.6 mm thick. The 1000 µF caps are the tallest parts, so the assembled
+  board is about 37 mm tall (less if the caps are bent over). Four M3 holes: two in the battery strip, two in the
+  bottom corners.
 
-## Design review (rev B)
+## Design review (rev B, kept for reference)
 
 A full review of rev A found and fixed these problems:
 
@@ -364,23 +363,27 @@ simulation passes on two motors including the new overcurrent test.
 ## PCB layout rules
 
 * Use 4 layers with 2 oz outer copper. Run 35 A battery and phase paths as wide pours on two or more layers,
-  stitched with many vias. The phase pours are 7.3 mm wide on both outer layers, kept free of signal tracks by
-  rule areas. Do not narrow them further.
-* Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. Put the bulk caps right
-  next to the bridges.
-* Give the FET drain/source pads thermal-via arrays down to a bottom pour. Bolt the board to an aluminium plate or the
-  case through a thermal pad. At 35 A, expect roughly 6–10 W of losses at full load.
-* Route each INA240's IN+/IN− from the shunt's own sense pads (pins 2/3 of the 4-terminal shunt), as a tight pair.
-* Keep the gate-drive loops short (driver → 4.7 Ω → gate, source → HS/VSS). Use one solid ground plane, and keep the
-  MCU and analog parts on the side away from the switching nodes.
+  stitched with many vias. Rule areas keep signal tracks off the switch-node and low-side copper on the top layer;
+  do not route across them.
+* Keep each half-bridge loop (high FET → low FET → 2.2 µF ceramics) as small as possible. The bulk caps sit right
+  next to the bridge.
+* Give the FET drain/source pads thermal-via arrays down to the bottom pours. Bolt the board to an aluminium plate or
+  the case through a thermal pad under the bridge (no parts on the bottom there). At 35 A, expect roughly 6–10 W of
+  losses at full load.
+* Route each shunt's sense pads (pins 2/3 of the 4-terminal shunt) to the DRV8353's SPx/SNx as a pair, with the
+  1 nF filter caps at the driver.
+* Keep the gate-drive traces short and away from the switch nodes; the DRV8353's SHx pin senses each switch node at
+  the high-side source, next to the gate pin. Use one solid ground plane, and keep the MCU and analog parts away from
+  the switching nodes.
 * Keep TH1 (the NTC) next to the low-side FETs, which run hottest.
-* Keep signal tracks off the inner planes under the FETs, DC-link caps and shunts (enforced by a rule area).
 
 ## Things to double-check against datasheets before ordering
 
-* The LM5164 ripple-injection and inductor values were chosen with the datasheet formulas but not run through TI
-  WEBENCH.
-* The bulk capacitor ripple rating. At 35 A the caps carry about 17 A rms in total, roughly 4.3 A per can for four.
-  The three-phase worst case at full phase current and low speed is ≈ 27 A rms for short periods. Check the
-  ERS1KM102M35OT datasheet (about 3 A per can expected), and watch can temperature in sustained hard use.
+* The DRV8353RS buck (LM5008A core) component values (RT / shutdown divider, 100 µH inductor, 4.02 k / 4.02 k
+  feedback divider, 8.2 k / 47 nF / 330 pF ripple injection) were chosen with the datasheet formulas but not run
+  through TI WEBENCH.
+* The DRV8353's gate-current setting (300 mA / 600 mA) and the gate-drive trace lengths: the longest gate trace is
+  ≈ 60 mm (phase C high side). The driver's current-mode drive tolerates this, but look at the gate waveform on the
+  first board and lower IDRIVE if it rings.
+* The bulk capacitor ripple rating (≈ 5.7 A rms per can at 35 A battery current; see above).
 * Choose `v_uv_*` for your pack. The defaults are for 13S.
