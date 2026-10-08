@@ -973,6 +973,29 @@ def ses_obstacles(ses_path):
     return segs, vias
 
 
+def apply_ses_placement(board, ses_path):
+    """Put every part where the SES says it was when that routing was made, so a
+    rebuild never depends on the placement code being unchanged."""
+    root = parse(open(ses_path).read())
+    res = find1(find1(root, 'routes'), 'resolution')
+    scale = {'um': 1e-3, 'mm': 1.0, 'mil': 0.0254, 'inch': 25.4}[str(res[1])] / float(res[2])
+    n = 0
+    for comp in find(find1(root, 'placement'), 'component'):
+        for pl in find(comp, 'place'):
+            fp = board.FindFootprintByReference(str(pl[1]))
+            if fp is None:
+                continue
+            x, y = float(pl[2]) * scale, -float(pl[3]) * scale
+            back = str(pl[4]) == 'back'
+            rot = float(pl[5]) if len(pl) > 5 else 0.0
+            if back != fp.IsFlipped():
+                fp.Flip(fp.GetPosition(), True)
+            fp.SetOrientationDegrees((180.0 - rot) if back else rot)
+            fp.SetPosition(mm(x, y))
+            n += 1
+    return n
+
+
 def import_ses(board, ses_path, extra_rip=()):
     import hashlib
     rip = set(RIP_UP.get(hashlib.sha1(open(ses_path, 'rb').read()).hexdigest(), set())) | set(extra_rip)
@@ -1073,6 +1096,8 @@ def main():
     ap.add_argument('--no-short-repair', action='store_true',
                     help='skip the DRC-checked short repairs (slow on a dense board) and go '
                          'straight to the grid router')
+    ap.add_argument('--polish', type=int, default=0,
+                    help='run Freerouting again for N passes starting from the imported routing')
     ap.add_argument('--ripup', type=int, default=0,
                     help='rounds of rip-up-and-reroute for connections the grid router cannot finish')
     ap.add_argument('--no-optimize', action='store_true',
@@ -1082,16 +1107,27 @@ def main():
     dsn = os.path.join(args.workdir, 'bldc48.dsn')
     ses = os.path.join(args.workdir, 'bldc48.ses')
 
-    gen_pcb.main()                       # fresh, deterministic placement
-    board = pcbnew.LoadBoard(PCB)
-    ds = board.GetDesignSettings()
-    ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
-    ds.SetCustomViaSize(True)
-    plane_keepout(board)
-    phase_keepout(board)
-    edge_keepout(board)
     avoid = ses_obstacles(args.ses) if args.avoid_ses else ((), ())
-    print(f'fan-out: {fanout(board, avoid=avoid)} plane vias, {sense_taps(board)} sense taps')
+
+    def prepare(placed_by=None, quiet=False):
+        gen_pcb.main()                   # fresh, deterministic placement
+        b = pcbnew.LoadBoard(PCB)
+        if placed_by:                    # ... or exactly the one this SES was routed on
+            n = apply_ses_placement(b, placed_by)
+            if not quiet:
+                print(f'placement of {n} parts taken from the SES')
+        ds = b.GetDesignSettings()
+        ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
+        ds.SetCustomViaSize(True)
+        plane_keepout(b)
+        phase_keepout(b)
+        edge_keepout(b)
+        nf, nt = fanout(b, avoid=avoid), sense_taps(b)
+        if not quiet:
+            print(f'fan-out: {nf} plane vias, {nt} sense taps')
+        return b
+
+    board = prepare(args.ses)
     if not pcbnew.ExportSpecctraDSN(board, dsn):
         raise SystemExit('DSN export failed')
     patch_dsn(dsn, board)
@@ -1115,21 +1151,30 @@ def main():
     if not os.path.exists(ses):
         raise SystemExit('freerouting produced no SES')
 
+    if args.polish:                      # Freerouting again, starting from this routing
+        board = prepare(ses, quiet=True)
+        import_ses(board, ses)
+        dsn2 = os.path.join(args.workdir, 'bldc48-polish.dsn')
+        ses2 = os.path.join(args.workdir, 'bldc48-polish.ses')
+        if os.path.exists(ses2):
+            os.remove(ses2)
+        if not pcbnew.ExportSpecctraDSN(board, dsn2):
+            raise SystemExit('DSN export failed')
+        patch_dsn(dsn2, board)
+        cmd = ['xvfb-run', '-a', 'java', '-jar', args.freerouting, '-de', dsn2, '-do', ses2,
+               '-mp', str(args.polish), '-mt', '0']
+        print(' '.join(cmd))
+        subprocess.run(cmd, check=False)
+        if not os.path.exists(ses2):
+            raise SystemExit('freerouting produced no polished SES')
+        ses = ses2
+
     import hashlib
     rip = set(RIP_UP.get(hashlib.sha1(open(ses, 'rb').read()).hexdigest(), set()))
     first = []
     for rnd in range(args.ripup + 1):
-        if rnd:                              # fresh placement, then the SES minus the ripped nets
-            gen_pcb.main()
-            board = pcbnew.LoadBoard(PCB)
-            ds = board.GetDesignSettings()
-            ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
-            ds.SetCustomViaSize(True)
-            plane_keepout(board)
-            phase_keepout(board)
-            edge_keepout(board)
-            fanout(board, avoid=avoid)
-            sense_taps(board)
+        if rnd or args.polish:               # fresh placement, then the SES minus the ripped nets
+            board = prepare(ses, quiet=True)
         nt, nv = import_ses(board, ses, extra_rip=rip)
         print(f'imported {nt} track segments, {nv} vias')
         print(f'added {hand_routes(board, ses)} hand route(s)')
