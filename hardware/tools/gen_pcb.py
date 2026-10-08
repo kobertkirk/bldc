@@ -189,7 +189,8 @@ REGIONS = {
     'buck':  [(47.5, 41.8, 69.6, _YD)],
     'conn':  [(7.4, H - 7.5, 82.6, H - 0.2)],
     # bottom side (outside the heat-plate area), clear of the DRV fan-out
-    'mcu':   [(40.0, 41.8, 69.6, _YD)],
+    # right under the DRV8353's PWM / SPI side, so those pins drop straight through
+    'mcu':   [(24.0, _DY + _K + 1.0, 56.0, _YD), (40.0, 41.8, 69.6, _YD)],
     # I/O conditioning right under the connectors it serves, then the left corner
     'io':    [(7.4, H - 7.5, 82.6, H - 0.4), (0.5, 41.8, _DX - _K - 1.0, _YD),
               (70.6, 12.0, 89.5, 26.5), (70.6, 31.2, 89.5, 46.0)],
