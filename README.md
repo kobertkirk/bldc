@@ -26,11 +26,12 @@ firmware/
 ```
 
 > **Status — read this before building.** The schematic is complete and has been checked pin by pin (see
-> [Verification](#verification)). The 180 × 69.5 mm 4-layer PCB (rev E) is **fully routed and passes KiCad DRC with
-> 0 violations and 0 unconnected pads**. The power stage is placed by hand (see [Board](#board)); the signal routing
-> was done by an autorouter (Freerouting) plus scripted copper pours, so have it reviewed before ordering.
-> The firmware compiles and passes a detailed simulation, but it has **not been run on real hardware**. Bring the
-> first board up with the current-limited procedure in [First power-up](#first-power-up).
+> [Verification](#verification)). The @SIZE@ mm 4-layer, two-sided PCB (rev F) is **fully routed and passes KiCad
+> DRC with 0 violations and 0 unconnected pads**. The power stage is placed by script around fixed columns; the signal
+> routing was done by an autorouter (Freerouting), a small grid router for what it leaves open, and scripted copper
+> pours, so have it reviewed before ordering. The firmware compiles and passes a detailed simulation, but it has
+> **not been run on real hardware**. Bring the first board up with the current-limited procedure in
+> [First power-up](#first-power-up).
 
 ![3D render of the routed board](hardware/renders/bldc48-iso.png)
 
@@ -39,42 +40,45 @@ firmware/
 ## Block diagram
 
 ```
- BAT+ ──┬── TVS ── 8×220µF + 8×2.2µF ──┬──────────────────────────────┐
-        │                               │  3 × half bridge             │
-        │   ┌─ LM5164 → +12 V ── LM5109B gate drivers ── 6 × IPT015N10N5 ── 0.5 mΩ ── MOTOR A/B/C
-        │   │                                                        │      shunt
-        ├─Q1┤─ LM5164 → +5 V ── AP2112 → +3.3 V                       INA240A1 ×3 (G=20)
-        │   │      (halls, throttle)        │                            │
-  PWR ──┘   └── PWR_HOLD ◄──────────── STM32G431CB ◄── I_A/B/C, VBUS, throttle, NTCs
-  button                                    │  ▲
-                                UART ◄──────┘  └── halls, FWD/REV, brake, button
+ BAT+ ──┬── TVS ── 3×1000µF + 6×2.2µF ──┬────────────────────────────────────┐
+        │                                │  3 × half bridge (6 × IPT015N10N5) │
+        │        ┌──────── DRV8353RS ────┴── GHx / GLx gate drive, SHx sense  ├── MOTOR A/B/C
+        │        │  charge pump, 6-95 V buck → +5 V ── AP2112 → +3.3 V        │
+        ├─Q1─────┤  3 × current-sense amp (G=20) ◄── 0.5 mΩ low-side Kelvin shunts
+        │ latch  │  SPI config / fault readout, nFAULT
+  PWR ──┘        └──► STM32G431CB ◄── ISENSE A/B/C, VBUS, throttle, NTCs
+  button               │  ▲
+              UART ◄───┘  └── halls, FWD/REV, brake, button
 ```
 
 ## Connectors
 
 | Ref | Connector | Pin 1 | Pin 2 | Pin 3 | Pin 4 | Pin 5 | Pin 6 |
 |---|---|---|---|---|---|---|---|
-| J1 / J2 | M5 bolt terminals (left edge, 36 mm apart) | BAT+ / BAT− | | | | | |
-| J3–J5 | M5 bolt terminals (bottom edge) | MOTOR A / B / C | | | | | |
-| HALL | JST-PH 6 | +5 V | GND | Hall A | Hall B | Hall C | Motor NTC (optional) |
-| THROTTLE | JST-PH 3 | +5 V | Signal | GND | | | |
-| FWD/REV | JST-PH 2 | DIR (to GND = reverse) | GND | | | | |
-| BRAKE | JST-PH 2 | BRAKE (to GND = braking) | GND | | | | |
-| POWER_BTN | JST-PH 2 | PWR_SW (momentary to GND) | GND | | | | |
-| UART | JST-PH 4 | +3.3 V out | TX (board → host) | RX (host → board) | GND | | |
-| SWD | 1×5 header | +3.3 V | SWDIO | SWCLK | NRST | GND | |
+| J1 / J2 | 12 AWG solder pads (2.8 mm hole), right of the bridge | BAT+ / BAT− | | | | | |
+| J3–J5 | 12 AWG solder pads, one per phase column | MOTOR A / B / C | | | | | |
+| HALL | JST-GH 6 | +5 V | GND | Hall A | Hall B | Hall C | Motor NTC (optional) |
+| THROTTLE | JST-GH 3 | +5 V | Signal | GND | | | |
+| FWD/REV | JST-GH 2 | DIR (to GND = reverse) | GND | | | | |
+| BRAKE | JST-GH 2 | BRAKE (to GND = braking) | GND | | | | |
+| POWER_BTN | JST-GH 2 | PWR_SW (momentary to GND) | GND | | | | |
+| UART | JST-GH 4 | +3.3 V out | TX (board → host) | RX (host → board) | GND | | |
+| SWD | JST-GH 5 | +3.3 V | SWDIO | SWCLK | NRST | GND | |
 
-The power button and all signal wires carry 3.3–5 V only, never battery voltage, so a cheap handlebar button is fine.
-Battery and phase wires should be 12 AWG (10 AWG for long runs) with M5 ring lugs, bolted to the plated terminals
-(screw, washer and nut; the terminal pads are via-stitched to the inner planes). Put an **XT90-S anti-spark connector** and a
-**40 A fuse** in the battery lead: the board has no reverse-polarity or inrush protection.
+All signal connectors are JST-GH (1.25 mm, latching) along the bottom edge. The power button and all signal wires
+carry 3.3–5 V only, never battery voltage, so a cheap handlebar button is fine. Battery and phase wires are **12 AWG
+silicone wire soldered straight into the plated pads** (strip 4 mm, push through, solder from the top; the pads are
+via-stitched to the pours on all layers). Strain-relieve the wires to the case or heat plate with a cable tie so the
+joints never carry the cable's weight. Put an **XT90-S anti-spark connector** and a **40 A fuse** in the battery
+lead: the board has no reverse-polarity or inrush protection.
 
 ## First power-up
 
 1. Flash the firmware over SWD (`cd firmware && make flash`).
 2. Use a **bench supply at 48 V with a 2 A current limit**. Connect the UART (3.3 V USB-serial adapter at 115200 baud)
    and the halls, but leave the motor phases disconnected. Press the power button: the green LED blinks and telemetry
-   lines (`$TLM,...`) appear. Type `status`. You should see vbus ≈ 48 V and `faults NOT_DETECTED`.
+   lines (`$TLM,...`) appear. Type `status`. You should see vbus ≈ 48 V and `faults NOT_DETECTED`. Type `drv`:
+   it should report `nFAULT=high` and zero status words (the DRV8353RS took its SPI settings).
 3. Connect the motor phases (any order) and the hall connector. **Lift the wheel** so it spins freely.
 4. Type `detect`. The wheel turns slowly forwards and then backwards (about 15 s total). Expected result:
    `detect OK: R = … mOhm, L = … uH, halls learned`. Type `save`.
@@ -107,6 +111,7 @@ NTC is enabled.)
 | `save` / `defaults` | Write the config to flash / reload the defaults into RAM |
 | `detect` / `detect r` / `detect l` / `detect hall` | Run auto-detect: everything, or only R, L or the hall table |
 | `clear` | Clear latched faults |
+| `drv` | DRV8353RS fault/status words, live and as captured at the last driver trip |
 | `off` / `reboot` | Power the board off / restart the MCU |
 
 Main parameters (`get` lists them all): `i_phase_max` 60 A, `i_batt_max` 35 A, `i_batt_regen` 5 A, `i_brake` 0 A (regen
@@ -127,6 +132,7 @@ on the brake input, off by default), `v_uv_start` 42 V / `v_uv_cut` 39 V (13S), 
 | 0x100 | last detect failed | 9 |
 | 0x200 | current-sensor offset out of range | 10 |
 | 0x400 | throttle held at power-up | 11 |
+| 0x800 | gate driver fault (DRV8353 nFAULT: VDS overcurrent, gate fault, UVLO, over-temperature); `drv` shows the fault words; the driver is re-initialised before it clears | 12 |
 
 `limits` bits (why torque is reduced right now): 0x01 battery current, 0x02 phase current, 0x04 undervoltage
 fold-back, 0x08 FET temperature, 0x10 motor temperature, 0x20 speed limit, 0x40 out of voltage (top speed),
@@ -137,22 +143,26 @@ zero, so the motor can never restart while the throttle is held.
 
 ## How it works
 
-**Power stage.** Six Infineon IPT015N10N5 (100 V, 1.5 mΩ, TOLL package) are driven by three LM5109B 100 V half-bridge
-drivers through 4.7 Ω gate resistors (≈100 ns edges, ≈1.7 W switching loss per phase at 35 A), with 10 k pull-downs on the gates and the PWM inputs. The MCU's TIM1 generates
-20 kHz centre-aligned complementary PWM with 400 ns hardware dead time. With the main output disabled, all six gates
-are held low.
+**Power stage.** Six Infineon IPT015N10N5 (100 V, 1.5 mΩ, TOLL package) are driven directly by a TI DRV8353RS
+smart gate driver (100 V, SPI). It sets the gate current itself (300 mA source / 600 mA sink, ≈100 ns edges on these
+FETs), so there are no gate resistors; it adds 100 ns of its own dead time on top of the MCU's 400 ns and has a VDS
+short-circuit trip (0.3 V, ≈110 A at 125 °C) behind the firmware's 80 A trip. Its SHx inputs sense each switch node
+at the high-side source, right next to the gate pin. The MCU's TIM1 generates 20 kHz centre-aligned complementary
+PWM (6-input mode). With the main output disabled, or with the driver asleep, all six gates are held low.
 
-**Current sensing.** There is a 0.5 mΩ 4-terminal (Kelvin) shunt in each motor phase (Bourns CSS4J-4026R-L500F, 5 W),
-read through its separate sense pads by an INA240A1. The INA240A1 has gain 20, rejects the PWM common-mode swing,
-accepts −4 to 80 V common mode and is biased to mid-rail. Full scale is ±165 A per phase, comfortably above the 80 A
-hard trip (a compile-time check enforces this). Sensing in the phase lines means the current is valid at every moment, including during coasting.
+**Current sensing.** A 0.5 mΩ 4-terminal (Kelvin) shunt sits in each low-side source (Bourns CSS4J-4026R-L500F,
+5 W). Its sense pads go to one of the DRV8353RS's three current-sense amplifiers (gain 20, biased to mid-rail), so full
+scale is ±165 A per phase, comfortably above the 80 A hard trip (a compile-time check enforces this). The ADCs sample
+while all three low-side FETs conduct, triggered by TIM1 channel 4 just before the counter peak. Above 90 % duty one
+phase's low-side window is too short, so that phase's current is rebuilt from the other two (Ia + Ib + Ic = 0); the
+duty is capped at 97 % so the bootstrap capacitors always recharge.
 
 **Control.** The ADCs are triggered by the PWM timer once per period, and the injected-conversion interrupt runs the
 FOC loop at 20 kHz:
 - Clarke and Park transforms.
 - PI current regulators on d and q, with BEMF/cross-coupling feed-forward and conditional-integration anti-windup.
 - PWM delay compensation.
-- Min/max SVPWM, capped at 92 % so the bootstrap capacitors always recharge.
+- Min/max SVPWM, capped at 97 % (low-side sensing needs a short low-side window; see above).
 
 The rotor angle comes from the halls. Each hall edge gives the exact boundary angle, and between edges the angle is
 extrapolated using a speed averaged over a full electrical revolution, which cancels sensor placement error. At
@@ -169,16 +179,19 @@ standstill the sector centre is used, which guarantees at least 86 % torque from
 The motor flux linkage is learned while riding and used to re-engage smoothly at speed.
 
 **Power latch.** When the button is pressed it pulls Q1's base (MMBTA92, 300 V PNP) low through 47 k and a diode.
-Q1 enables both LM5164 bucks. The MCU then sets PWR_HOLD, which turns on Q2 (MMBTA42) to keep Q1 on. A BAT46W
-blocks the button-sense pull-up, so the latch cannot creep on through the unpowered 3.3 V rail. The bucks' EN divider
-also gives a 20 V UVLO.
+Q1 enables the DRV8353RS's buck regulator. The MCU then sets PWR_HOLD, which turns on Q2 (MMBTA42) to keep Q1 on. A
+BAT46W blocks the button-sense pull-up, so the latch cannot creep on through the unpowered 3.3 V rail. The buck's
+enable divider also gives a ≈20 V UVLO. On shutdown the MCU first puts the gate driver to sleep, then releases the latch.
 
-**Supplies.** LM5164 (100 V synchronous buck, 300 kHz COT) for 48→12 V gate drive and 48→5 V sensors; AP2112K
-5→3.3 V logic. `Fsw = Vout·2500/Ron(kΩ)`, `Vout = 1.2·(1+Rtop/Rbot)`, type-3 ripple injection sized for 25 mV at FB.
+**Supplies.** The DRV8353RS's built-in 6–95 V buck (LM5008A core) makes +5 V for the halls, throttle and the
+AP2112K-3.3 LDO; its 100 µH inductor is a 6 × 6 mm Bourns SRN6045TA. The gate drive comes from the DRV8353's own
+charge pump (high side) and VGLS regulator (low side), so there is no 12 V rail and no separate gate-driver supply.
+On power-up the firmware writes the driver's five configuration registers over SPI, reads them back and locks them;
+a driver that does not answer stops the motor from starting (`drv` shows why).
 
 ## Verification
 
-* `hardware/tools/check_netlist.py` exports KiCad's own netlist and checks that **every pin of all 172 parts** sits on
+* `hardware/tools/check_netlist.py` exports KiCad's own netlist and checks that **every pin of all 133 parts** sits on
   the intended net, with no single-node nets. KiCad 7's CLI has no ERC, so this replaces it. A deliberately miswired
   pin is caught.
 * KiCad DRC on the routed PCB: **0 violations, 0 unconnected pads, 0 footprint errors**, including the check that
@@ -203,7 +216,7 @@ also gives a 20 V UVLO.
 ```
 sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi   # plus stlink-tools or openocd
 cd firmware
-make            # build/bldc48.elf/.bin/.hex  (~37 KB flash)
+make            # build/bldc48.elf/.bin/.hex  (~38 KB flash)
 make flash      # st-flash, or: make flash-ocd
 make sim        # closed-loop simulation on the PC
 ```
