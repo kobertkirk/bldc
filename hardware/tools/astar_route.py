@@ -25,7 +25,7 @@ from gen_pcb import ARRAY_Y, CAP_X, CAP_YS, H, POWER_X, W  # noqa: E402
 
 G = 0.25                         # grid pitch, mm
 OY = 0.15                        # grid y offset: puts the 0.5 mm MCU pin rows on grid
-TRACK_W, VIA_D, CLEAR = 0.25, 0.6, 0.21
+TRACK_W, VIA_D, CLEAR = 0.2, 0.6, 0.16
 EDGE = 1.0
 LAYERS = [pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu]
 CODES = {pcbnew.F_Cu: 'F', pcbnew.In1_Cu: '1', pcbnew.In2_Cu: '2', pcbnew.B_Cu: 'B'}

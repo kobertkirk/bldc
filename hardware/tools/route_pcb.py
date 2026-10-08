@@ -131,6 +131,7 @@ def phase_keepout(board):
 
 
 PLANE_NETS = ('GND',)            # reaches the solid In1 plane through fan-out vias
+SIG_CLEAR = 0.15                 # signal clearance, mm (IPC-2221 coated outer <= 100 V: 0.13)
 
 
 def sense_taps(board):
@@ -338,14 +339,15 @@ def edge_keepout(board, margin=1.0):
         board.Add(z)
 
 
-def patch_dsn(path, board, clearance_um=210):
+def patch_dsn(path, board, clearance_um=None):
     """Give the router a little clearance margin over KiCad's 0.2 mm rule
     (Specctra coordinates are rounded on the way back), and leave out the
     connections the pours make inside the power keep-outs: the low-side
     source nets (FET source -> shunt) and the motor wire pads on the switch
     nodes.  The router still joins each switch node to the DRV8353 SHx pin."""
     txt = open(path).read()
-    txt = re.sub(r'\(clearance 200\.1\)', f'(clearance {clearance_um})', txt)
+    clearance_um = clearance_um or round(SIG_CLEAR * 1000 + 10)
+    txt = re.sub(r'\(clearance (200|150)\.1\)', f'(clearance {clearance_um})', txt)
     # In1 is the solid GND plane: a power layer for the router (vias pass, no wires)
     txt = re.sub(r'(\(layer In1\.Cu\s*\(type )signal\)', r'\1power)', txt)
     txt = re.sub(r'\n\s*\(net LS_[ABC]\n\s*\(pins [^)]*\)\n\s*\)', '', txt)
@@ -559,12 +561,12 @@ def hand_routes(board, ses_path):
     return added
 
 
-def via_fits(board, q, ni, radius, clearance=0.21):
+def via_fits(board, q, ni, radius, clearance=None):
     """True if a via at q keeps clearance to every pad, track and via of other nets.
     (A layer change the router made through a through-hole pin looks like a
     via-less layer change at a nearby bend point; such a spot fails here.)"""
     pos = mm(*q)
-    acc = pcbnew.FromMM(radius + clearance)
+    acc = pcbnew.FromMM(radius + (clearance if clearance is not None else SIG_CLEAR + 0.01))
     for fp in board.GetFootprints():
         for p in fp.Pads():
             if p.GetNetCode() != ni.GetNetCode() and p.HitTest(pos, acc):
@@ -773,7 +775,7 @@ def nudge_fanout(board):
                 if not via_fits(board, q, ni, 0.3, 0.25):
                     continue
                 n = max(2, int(d / 0.1))
-                if all(via_fits(board, (px + (q[0] - px) * j / n, py + (q[1] - py) * j / n), ni, w / 2, 0.21)
+                if all(via_fits(board, (px + (q[0] - px) * j / n, py + (q[1] - py) * j / n), ni, w / 2, SIG_CLEAR + 0.01)
                        or j < 4 for j in range(1, n)):
                     best = q
                     break
@@ -1119,6 +1121,9 @@ def main():
         ds = b.GetDesignSettings()
         ds.m_MinThroughDrill = pcbnew.FromMM(0.2)
         ds.SetCustomViaSize(True)
+        nc = ds.m_NetSettings.m_DefaultNetClass  # 0.2 mm tracks, 0.15 mm gaps (JLC: 0.09)
+        nc.SetClearance(pcbnew.FromMM(SIG_CLEAR))
+        nc.SetTrackWidth(pcbnew.FromMM(0.2))
         plane_keepout(b)
         phase_keepout(b)
         edge_keepout(b)
