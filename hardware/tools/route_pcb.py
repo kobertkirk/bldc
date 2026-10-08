@@ -23,6 +23,13 @@ import re
 import subprocess
 import sys
 
+# Python's string hashing (set order) reaches the footprint order in the
+# generated board and so the order the fan-out vias are placed in: a fixed seed
+# keeps every rebuild of a saved SES identical to the board it was routed on.
+if __name__ == '__main__' and os.environ.get('PYTHONHASHSEED') != '2':
+    os.environ['PYTHONHASHSEED'] = '2'
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
 import pcbnew
 
 # lets DRC check footprints against the stock libraries via ../kicad/fp-lib-table
@@ -1113,6 +1120,9 @@ def main():
     ap.add_argument('--no-short-repair', action='store_true',
                     help='skip the DRC-checked short repairs (slow on a dense board) and go '
                          'straight to the grid router')
+    ap.add_argument('--rip', default='', help='comma-separated nets whose SES wiring is dropped and re-made '
+                                             'by the grid router')
+    ap.add_argument('--first', default='', help='comma-separated nets the grid router routes first')
     ap.add_argument('--polish', type=int, default=0,
                     help='run Freerouting again for N passes starting from the imported routing')
     ap.add_argument('--ripup', type=int, default=0,
@@ -1191,9 +1201,10 @@ def main():
 
     import hashlib
     rip = set(RIP_UP.get(hashlib.sha1(open(ses, 'rb').read()).hexdigest(), set()))
-    first = []
+    rip |= set(filter(None, args.rip.split(',')))
+    first = list(filter(None, args.first.split(',')))
     for rnd in range(args.ripup + 1):
-        if rnd or args.polish:               # fresh placement, then the SES minus the ripped nets
+        if rnd or args.polish or rip:        # fresh placement, then the SES minus the ripped nets
             board = prepare(ses, quiet=True)
         nt, nv = import_ses(board, ses, extra_rip=rip)
         print(f'imported {nt} track segments, {nv} vias')

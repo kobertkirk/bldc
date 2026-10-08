@@ -25,7 +25,7 @@ from gen_pcb import ARRAY_Y, CAP_X, CAP_YS, H, POWER_X, W  # noqa: E402
 
 G = 0.25                         # grid pitch, mm
 OY = 0.15                        # grid y offset: puts the 0.5 mm MCU pin rows on grid
-TRACK_W, VIA_D, CLEAR = 0.2, 0.6, 0.16
+TRACK_W, VIA_D, CLEAR = 0.2, 0.6, 0.19   # 0.15 mm rule + margin for path smoothing
 EDGE = 1.0
 LAYERS = [pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu]
 CODES = {pcbnew.F_Cu: 'F', pcbnew.In1_Cu: '1', pcbnew.In2_Cu: '2', pcbnew.B_Cu: 'B'}
@@ -151,7 +151,7 @@ def build(board, net, fence=True, soft=False, origin=None):
             continue
         if t.GetClass() == 'PCB_VIA':             # drill-to-drill spacing, any net
             x, y = to_mm(t.GetPosition().x), to_mm(t.GetPosition().y)
-            g.mark_disc(g.via, x, y, VIA_D + 0.26)
+            g.mark_disc(g.via, x, y, 0.3 + 0.25 + 0.05)   # drill to drill 0.25 mm + margin
         if t.GetNetCode() == code:
             continue
         if t.GetClass() == 'PCB_VIA':
@@ -329,8 +329,20 @@ def route(board, net, a, b, to_plane=False, fence=True, soft=False):
     (g.head / g.tail), so the grid never has to squeeze between its neighbours."""
     sl = item_layers(board, net, *a)
     gl = [] if to_plane else item_layers(board, net, *b)
-    ea = pin_exit(board, net, *a)
-    eb = None if to_plane else pin_exit(board, net, *b)
+    def free_exit(p, layers):
+        for ext in (0.45, 0.7, 1.0):
+            e = pin_exit(board, net, *p, ext=ext)
+            if e is None:
+                return None
+            gg = build(board, net, fence, soft, origin=e)
+            tip = pin_exit(board, net, *p, ext=0.0)
+            n = max(2, int(math.dist(tip, e) / 0.1))
+            pts = [(tip[0] + (e[0] - tip[0]) * t / n, tip[1] + (e[1] - tip[1]) * t / n) for t in range(1, n + 1)]
+            if all(not gg.track[k][gg.ij(*q)[1] * gg.nx + gg.ij(*q)[0]] for k in layers for q in pts):
+                return e
+        return None
+    ea = free_exit(a, sl)
+    eb = None if to_plane else free_exit(b, gl)
     g = build(board, net, fence, soft, origin=ea or a)
     g.head, g.tail = ea, eb
     if ea:

@@ -350,6 +350,30 @@ def place_at_pins(items, ic, regions, gap):
     return pending
 
 
+def face_mcu_to_drv(board):
+    """Turn the (square) MCU about its centre so the pins it shares with the
+    DRV8353 (PWM, SPI, enable / fault) face the driver: their traces then run
+    straight across instead of wrapping round the MCU."""
+    mcu = next(f for f in board.GetFootprints() if f.GetValue().startswith('STM32'))
+    drv = next(f for f in board.GetFootprints() if f.GetValue().startswith('DRV8353'))
+    at = {}
+    for p in drv.Pads():
+        if p.GetNetname() and p.GetNetname() != 'GND':
+            at[p.GetNetname()] = pcbnew.ToMM(p.GetPosition())
+    c = mcu.GetBoundingBox(False, False).GetCenter()
+    best = None
+    for rot in (0, 90, 180, 270):
+        mcu.SetOrientationDegrees(rot)
+        d = mcu.GetBoundingBox(False, False).GetCenter()
+        mcu.SetPosition(pcbnew.VECTOR2I(mcu.GetPosition().x + c.x - d.x, mcu.GetPosition().y + c.y - d.y))
+        cost = sum(math.dist(pcbnew.ToMM(p.GetPosition()), at[p.GetNetname()])
+                   for p in mcu.Pads() if p.GetNetname() in at)
+        if best is None or cost < best[0] - 1e-6:
+            best = (cost, rot, mcu.GetPosition())
+    mcu.SetOrientationDegrees(best[1])
+    mcu.SetPosition(best[2])
+
+
 def place_power(groups):
     def one(role):
         return groups.pop(role)[0][0]
@@ -506,6 +530,7 @@ def main():
                 fp.SetPosition(pcbnew.VECTOR2I(p.x + pcbnew.FromMM(2 * cx), p.y))
     if groups:
         raise SystemExit(f'unplaced groups: {sorted(groups)}')
+    face_mcu_to_drv(board)
 
     # terminals carry big silkscreen labels instead; hole refs would sit off the edge
     for fp in board.GetFootprints():
