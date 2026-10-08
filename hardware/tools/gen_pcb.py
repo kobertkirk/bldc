@@ -553,7 +553,7 @@ def main():
     # silkscreen: polarity and phase labels next to the terminals
     labels = [('BLDC48 rev F', 82.0, H - 12.0, 0.8),
               ('+', BAT_POS['BAT+'][0] - 4.6, BAT_POS['BAT+'][1], 2.0),
-              ('-', BAT_POS['BAT-'][0], BAT_POS['BAT-'][1] + 4.4, 2.0)]
+              ('-', BAT_POS['BAT-'][0] + 4.9, BAT_POS['BAT-'][1], 2.0)]
     labels += [(ph, col_x(ph) + TERM_X, Y_TERM - 4.4, 1.6) for ph in 'ABC']
     for txt, x, y, size in labels:
         t = pcbnew.PCB_TEXT(board)

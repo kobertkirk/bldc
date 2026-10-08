@@ -11,4 +11,4 @@ trap 'kill $SRV' EXIT
 sleep 1
 mkdir -p ../../renders
 node render.mjs board.wrl ../../renders/bldc48 \
-  iso:-28:40:1.5:0:6 top:0:89.9:1.5 power:-25:32:0.62:-16:-4 logic:28:38:0.45:66:4 terminals:-40:34:0.45:-80:-8 rear:155:38:1.45:0:-4
+  iso:-28:40:1.95:0:4 top:0:89.9:2.05 power:-20:38:0.95:-8:-22 terminals:-35:32:0.62:10:-16 rear:155:38:1.9:0:-4
